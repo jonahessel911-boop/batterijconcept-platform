@@ -6,10 +6,12 @@ import { appBaseUrl, monteurCcEmail, sendEmail } from "@/lib/email/postmark";
 import { replyToForLeadAdviseur } from "@/lib/email/adviseur-reply-to";
 import {
   installatieKlantEmail,
+  installatieKlantWijzigingEmail,
   installatiePartnerEmail,
 } from "@/lib/email/templates";
 import { logLeadEvent } from "@/lib/lead-events";
 import { feestdagPlanningFout } from "@/lib/nl-feestdagen";
+import { statusNaInstallatieInplannen } from "@/lib/project-status-config";
 
 export const runtime = "nodejs";
 
@@ -59,7 +61,9 @@ export async function POST(
 
     const { data: project, error: projErr } = await sb
       .from("projecten")
-      .select("id, installatie_partner_id")
+      .select(
+        "id, status, betaalwijze, installatie_partner_id, installatie_at, installatie_koppel_id, monteur, installatie_gcal_event_id, installatie_notities"
+      )
       .eq("id", id)
       .single();
 
@@ -69,6 +73,15 @@ export async function POST(
         { status: 404 }
       );
     }
+
+    const vorigeInstallatieAt =
+      (project as { installatie_at?: string | null }).installatie_at || null;
+    const vorigePartnerId =
+      (project as { installatie_partner_id?: string | null })
+        .installatie_partner_id || null;
+    const vorigeGcalEventId =
+      (project as { installatie_gcal_event_id?: string | null })
+        .installatie_gcal_event_id || null;
 
     const partnerId =
       body.installatie_partner_id || project.installatie_partner_id;
@@ -94,29 +107,58 @@ export async function POST(
 
     const { resolveKoppelVanPartner, koppelWeergaveNaam, koppelEmails } =
       await import("@/lib/installatie-koppel");
-    const koppelId = body.installatie_koppel_id?.trim() || null;
-    let monteurNaam: string | null = null;
+    const koppelIdExplicit = body.installatie_koppel_id !== undefined;
+    let koppelId = koppelIdExplicit
+      ? body.installatie_koppel_id?.trim() || null
+      : (project as { installatie_koppel_id?: string | null })
+          .installatie_koppel_id || null;
+    let monteurNaam: string | null =
+      (project as { monteur?: string | null }).monteur || null;
     let extraMonteurEmails: string[] = [];
     if (koppelId) {
       const koppel = await resolveKoppelVanPartner(partner.id, koppelId);
       if (!koppel) {
-        return NextResponse.json(
-          { error: "Koppel niet gevonden bij deze installateur" },
-          { status: 400 }
-        );
+        if (koppelIdExplicit) {
+          return NextResponse.json(
+            { error: "Koppel niet gevonden bij deze installateur" },
+            { status: 400 }
+          );
+        }
+        koppelId = null;
+        monteurNaam = null;
+      } else {
+        monteurNaam = koppelWeergaveNaam(koppel);
+        extraMonteurEmails = koppelEmails(koppel);
       }
-      monteurNaam = koppelWeergaveNaam(koppel);
-      extraMonteurEmails = koppelEmails(koppel);
     }
 
-    const installatieNotities = body.installatie_notities?.trim() || null;
+    const tijdGewijzigd =
+      Boolean(vorigeInstallatieAt) &&
+      Math.abs(
+        new Date(vorigeInstallatieAt as string).getTime() -
+          installatieAt.getTime()
+      ) > 60_000;
+    const partnerGewijzigd =
+      Boolean(vorigePartnerId) && vorigePartnerId !== partner.id;
+    const isWijziging = tijdGewijzigd || partnerGewijzigd;
+
+    const nextStatus = statusNaInstallatieInplannen({
+      currentStatus: (project as { status?: string | null }).status,
+      betaalwijze: (project as { betaalwijze?: string | null }).betaalwijze,
+    });
+
+    const installatieNotities =
+      body.installatie_notities !== undefined
+        ? body.installatie_notities?.trim() || null
+        : (project as { installatie_notities?: string | null })
+            .installatie_notities || null;
     const updatePatch: Record<string, unknown> = {
       installatie_at: installatieAt.toISOString(),
       installatie_notities: installatieNotities,
       installatie_partner_id: partner.id,
       monteur: monteurNaam,
       installatie_koppel_id: koppelId,
-      status: "installatie_ingepland",
+      status: nextStatus,
       installatie_herinnering_verstuurd: false,
       installatie_mail_klant_verstuurd: false,
       installatie_mail_partner_verstuurd: false,
@@ -201,7 +243,12 @@ export async function POST(
     const whenIso = installatieAt.toISOString();
 
     const mails: {
-      klant: { ok: boolean; skipped?: boolean; error?: string };
+      klant: {
+        ok: boolean;
+        skipped?: boolean;
+        error?: string;
+        wijziging?: boolean;
+      };
       partner: { ok: boolean; skipped?: boolean; error?: string };
     } = {
       klant: { ok: false, skipped: true },
@@ -229,25 +276,36 @@ export async function POST(
       } catch {
         /* track optioneel */
       }
-      const html = installatieKlantEmail({
-        naam: lead.naam || "klant",
-        installatieAt: whenIso,
-        adres,
-        projectNummer: updated.project_nummer,
-        trackUrl,
-      });
+      const html = isWijziging
+        ? installatieKlantWijzigingEmail({
+            naam: lead.naam || "klant",
+            installatieAt: whenIso,
+            vorigeInstallatieAt,
+            adres,
+            projectNummer: updated.project_nummer,
+            trackUrl,
+          })
+        : installatieKlantEmail({
+            naam: lead.naam || "klant",
+            installatieAt: whenIso,
+            adres,
+            projectNummer: updated.project_nummer,
+            trackUrl,
+          });
       const sent = await sendEmail({
         to: lead.email.trim(),
-        subject: "Installatie gepland — Batterijconcept",
+        subject: isWijziging
+          ? "Wijziging installatieafspraak — Batterijconcept"
+          : "Installatie gepland — Batterijconcept",
         html,
-        tag: "installatie-klant",
+        tag: isWijziging ? "installatie-klant-wijziging" : "installatie-klant",
         replyTo: await replyToForLeadAdviseur(
           sb,
           updated.lead_id as string | null
         ),
       });
       mails.klant = sent.ok
-        ? { ok: true }
+        ? { ok: true, wijziging: isWijziging }
         : { ok: false, error: sent.error || "Versturen mislukt" };
       if (sent.ok) mailPatch.installatie_mail_klant_verstuurd = true;
     } else {
@@ -274,6 +332,7 @@ export async function POST(
         projectNummer: updated.project_nummer,
         notities: installatieNotities,
         portalUrl,
+        wijziging: isWijziging,
       });
       const to = partner.email?.trim() || monteurCc!;
       const cc =
@@ -281,9 +340,13 @@ export async function POST(
       const sent = await sendEmail({
         to,
         cc,
-        subject: "Nieuwe installatie ingepland — Batterijconcept",
+        subject: isWijziging
+          ? "Installatieafspraak gewijzigd — Batterijconcept"
+          : "Nieuwe installatie ingepland — Batterijconcept",
         html,
-        tag: "installatie-partner",
+        tag: isWijziging
+          ? "installatie-partner-wijziging"
+          : "installatie-partner",
       });
       mails.partner = sent.ok
         ? { ok: true }
@@ -318,15 +381,23 @@ export async function POST(
       await logLeadEvent({
         leadId: updated.lead_id,
         soort: "installatie",
-        titel: "Installatie gepland",
-        detail: [
-          formatDateTimeNl(whenIso),
-          updated.project_nummer
-            ? `Project ${updated.project_nummer}`
-            : null,
-        ]
-          .filter(Boolean)
-          .join(" · "),
+        titel: isWijziging
+          ? "Installatieafspraak gewijzigd"
+          : "Installatie gepland",
+        detail: isWijziging
+          ? `Installatie verzet naar ${formatDateTimeNl(whenIso)}${
+              vorigeInstallatieAt
+                ? ` (was ${formatDateTimeNl(vorigeInstallatieAt)})`
+                : ""
+            }`
+          : [
+              formatDateTimeNl(whenIso),
+              updated.project_nummer
+                ? `Project ${updated.project_nummer}`
+                : null,
+            ]
+              .filter(Boolean)
+              .join(" · "),
         meta: {
           project_id: id,
           installatie_at: whenIso,
@@ -335,7 +406,17 @@ export async function POST(
       });
     }
 
-    const { syncPartnerGoogleEvent } = await import("@/lib/google-calendar");
+    const { deletePartnerGoogleEvent, syncPartnerGoogleEvent } = await import(
+      "@/lib/google-calendar"
+    );
+    if (partnerGewijzigd && vorigePartnerId && vorigeGcalEventId) {
+      await deletePartnerGoogleEvent({
+        partnerId: vorigePartnerId,
+        projectId: id,
+        kind: "installatie",
+        eventId: vorigeGcalEventId,
+      });
+    }
     const googleCalendar = await syncPartnerGoogleEvent({
       partnerId: partner.id,
       projectId: id,
@@ -345,9 +426,12 @@ export async function POST(
       titel: updated.titel,
       notities: installatieNotities,
       lead,
-      existingEventId:
-        (updated as { installatie_gcal_event_id?: string | null })
-          .installatie_gcal_event_id || null,
+      existingEventId: partnerGewijzigd
+        ? null
+        : vorigeGcalEventId ||
+          (updated as { installatie_gcal_event_id?: string | null })
+            .installatie_gcal_event_id ||
+          null,
     });
 
     return NextResponse.json({

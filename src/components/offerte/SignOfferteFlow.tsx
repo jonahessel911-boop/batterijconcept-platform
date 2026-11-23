@@ -4,7 +4,7 @@ import { useCallback, useMemo, useState } from "react";
 import Image from "next/image";
 import type { Offerte, OfferteRegel } from "@/types/database";
 import { formatDateNl, formatDateTimeNl, formatEuro, adresRegel } from "@/lib/format";
-import { offerteRegelsVoorWeergave, zichtbareKortingIncVanRegels, zichtbareOfferteTotalen } from "@/lib/offerte-regels";
+import { offertePrijsSpecificatie, offerteRegelsVoorWeergave } from "@/lib/offerte-regels";
 import { SignaturePadField } from "./SignaturePadField";
 
 type Props = {
@@ -44,11 +44,13 @@ export function SignOfferteFlow({ offerte, regels, bedrijf }: Props) {
       }),
     [regels, offerte.financiering_voorbehoud]
   );
-  const kortingInc = useMemo(() => zichtbareKortingIncVanRegels(regels), [regels]);
-  const zichtbaarTotaal = useMemo(
-    () => zichtbareOfferteTotalen(offerte, regels),
+  const spec = useMemo(
+    () => offertePrijsSpecificatie(offerte, regels),
     [offerte, regels]
   );
+  const klantBrutoEx = spec.toonKortingOpKlantOfferte
+    ? Math.round((spec.netEx - spec.zichtbareKortingEx) * 100) / 100
+    : spec.netEx;
   const alreadySigned = offerte.status === "ondertekend";
   const klantAdres = offerte.leads ? adresRegel(offerte.leads) : "—";
 
@@ -305,30 +307,45 @@ export function SignOfferteFlow({ offerte, regels, bedrijf }: Props) {
               </div>
 
               <div className="mt-6 ml-auto w-full max-w-[280px] space-y-0">
-                <div className="flex items-center justify-between border border-[#d5ddd8] px-3 py-2 text-sm">
-                  <span className="text-muted">Totaal excl. BTW</span>
-                  <span className="tabular-nums text-ink">
-                    {formatEuro(zichtbaarTotaal.subtotaalEx)}
-                  </span>
-                </div>
-                <div className="flex items-center justify-between border border-t-0 border-[#d5ddd8] px-3 py-2 text-sm">
-                  <span className="text-muted">21% BTW</span>
-                  <span className="tabular-nums text-ink">
-                    {formatEuro(zichtbaarTotaal.btw)}
-                  </span>
-                </div>
-                {kortingInc < 0 && (
-                  <div className="flex items-center justify-between border border-t-0 border-[#d5ddd8] bg-wash px-3 py-2.5 text-sm font-semibold">
-                    <span className="text-green-deeper">Korting</span>
-                    <span className="tabular-nums text-green-deeper">
-                      {formatEuro(kortingInc)}
+                {spec.toonKortingOpKlantOfferte ? (
+                  <>
+                    <div className="flex items-center justify-between border border-[#d5ddd8] px-3 py-2 text-sm">
+                      <span className="text-muted">Subtotaal excl. BTW</span>
+                      <span className="tabular-nums text-ink">
+                        {formatEuro(klantBrutoEx)}
+                      </span>
+                    </div>
+                    <div className="flex items-center justify-between border border-t-0 border-[#d5ddd8] bg-wash px-3 py-2.5 text-sm font-semibold">
+                      <span className="text-green-deeper">Korting</span>
+                      <span className="tabular-nums text-green-deeper">
+                        {formatEuro(spec.zichtbareKortingEx)}
+                      </span>
+                    </div>
+                    <div className="flex items-center justify-between border border-t-0 border-[#d5ddd8] px-3 py-2 text-sm">
+                      <span className="text-muted">Totaal excl. BTW</span>
+                      <span className="tabular-nums text-ink">
+                        {formatEuro(spec.netEx)}
+                      </span>
+                    </div>
+                  </>
+                ) : (
+                  <div className="flex items-center justify-between border border-[#d5ddd8] px-3 py-2 text-sm">
+                    <span className="text-muted">Totaal excl. BTW</span>
+                    <span className="tabular-nums text-ink">
+                      {formatEuro(spec.netEx)}
                     </span>
                   </div>
                 )}
+                <div className="flex items-center justify-between border border-t-0 border-[#d5ddd8] px-3 py-2 text-sm">
+                  <span className="text-muted">21% BTW</span>
+                  <span className="tabular-nums text-ink">
+                    {formatEuro(spec.btw)}
+                  </span>
+                </div>
                 <div className="flex items-center justify-between border border-t-0 border-[#d5ddd8] px-3 py-2.5 text-sm font-semibold">
                   <span className="text-green-deeper">Totaal incl. BTW</span>
                   <span className="tabular-nums text-green-deeper">
-                    {formatEuro(zichtbaarTotaal.totaalInc)}
+                    {formatEuro(spec.totaalInc)}
                   </span>
                 </div>
               </div>

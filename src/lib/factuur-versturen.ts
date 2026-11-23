@@ -13,6 +13,7 @@ import {
 } from "@/lib/factuur-betaling";
 import { companyInfo } from "@/lib/pdf-brand";
 import { selectFactuurById } from "@/lib/factuur-query";
+import { loadOfferteKortingEx } from "@/lib/offerte-regels";
 
 export type VerstuurFactuurResult =
   | { ok: true; factuur: unknown; messageId?: string }
@@ -118,11 +119,13 @@ export async function verstuurFactuurNaarKlant(
     vervaldatum,
   };
 
+  const kortingEx = await loadOfferteKortingEx(sb, factuur.offerte_id as string | null);
   const blob = await buildFactuurPdf({
     factuur: factuurVoorPdf,
     lead: factuur.leads,
     offerte,
     creditVanNummer,
+    kortingEx,
   });
   const pdfBytes = Buffer.from(await blob.arrayBuffer());
   const filename = `${isCredit ? "credit-" : ""}${factuur.factuur_nummer}.pdf`;

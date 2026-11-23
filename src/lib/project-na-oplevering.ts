@@ -1,9 +1,9 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import type { ProjectStatus } from "@/types/database";
 import { isOpleveringsrapportBewijs } from "@/lib/project-documenten";
-import { parseOpleverFormulierSnapshot } from "@/lib/oplever-formulier";
-import { ensurePartnerInstallatieCreditfactuur } from "@/lib/partner-installatie-creditfactuur";
-import { ensureAdviseurCommissieTrancheB } from "@/lib/netto-creditfactuur";
+import { snapshotIsOpleverFormulier } from "@/lib/installatie-opgeleverd";
+
+export { installatieIsOpgeleverd } from "@/lib/installatie-opgeleverd";
 
 /**
  * Eindafrekening: na oplevering moet het hele offertebedrag gefactureerd zijn.
@@ -37,18 +37,30 @@ async function ensureOpleveringAfrondTaken(
   }
 }
 
+async function partnerInstallatieCreditfactuur(
+  sb: SupabaseClient,
+  projectId: string
+) {
+  const { ensurePartnerInstallatieCreditfactuur } = await import(
+    "@/lib/partner-installatie-creditfactuur"
+  );
+  return ensurePartnerInstallatieCreditfactuur(sb, projectId);
+}
+
+async function adviseurCommissieTrancheB(
+  sb: SupabaseClient,
+  projectId: string
+) {
+  const { ensureAdviseurCommissieTrancheB } = await import(
+    "@/lib/netto-creditfactuur"
+  );
+  return ensureAdviseurCommissieTrancheB(sb, projectId);
+}
+
 const AFTER_SALE_OVERSLAAN = new Set([
   "annulering",
   "hold_sales_actie",
 ]);
-
-function snapshotIsOpleverFormulier(raw: unknown): boolean {
-  const snap = parseOpleverFormulierSnapshot(raw);
-  if (!snap) return false;
-  return Boolean(
-    snap.akkoord || snap.sin || snap.afgevinkt.length > 0 || snap.monteurNaam
-  );
-}
 
 /** Snapshot-formulier aanwezig, maar orderstatus nog niet After sale. */
 export function projectMoetNaarAfterSale(project: {
@@ -145,7 +157,7 @@ export async function maybeAdvanceProjectNaOplevering(
     await ensureEindafrekening(sb, projectId);
     let creditfactuur_id: string | null = null;
     try {
-      const cf = await ensurePartnerInstallatieCreditfactuur(sb, projectId);
+      const cf = await partnerInstallatieCreditfactuur(sb, projectId);
       if (cf.ok && cf.creditfactuur_id) {
         creditfactuur_id = cf.creditfactuur_id;
       } else if (!cf.ok) {
@@ -230,7 +242,7 @@ export async function maybeAdvanceProjectNaOplevering(
 
   let creditfactuur_id: string | null = null;
   try {
-    const cf = await ensurePartnerInstallatieCreditfactuur(sb, projectId);
+    const cf = await partnerInstallatieCreditfactuur(sb, projectId);
     if (cf.ok && cf.creditfactuur_id) {
       creditfactuur_id = cf.creditfactuur_id;
     } else if (!cf.ok) {
@@ -244,7 +256,7 @@ export async function maybeAdvanceProjectNaOplevering(
   }
 
   try {
-    const advCf = await ensureAdviseurCommissieTrancheB(sb, projectId);
+    const advCf = await adviseurCommissieTrancheB(sb, projectId);
     if (!advCf.ok) {
       console.error(
         "ensureAdviseurCommissieTrancheB:",

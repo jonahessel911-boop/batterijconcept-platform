@@ -26,6 +26,10 @@ import {
   parseFactuurRegels,
   stripFactuurRegelsBlock,
 } from "@/lib/factuur-regels";
+import {
+  factuurKortingSpecificatie,
+  kortingExVanRegels,
+} from "@/lib/offerte-regels";
 import { StatusBadge } from "./StatusBadge";
 import { Breadcrumb, DetailShell, NotFoundState, TerugButton } from "./DetailChrome";
 
@@ -171,7 +175,13 @@ export function FactuurPage() {
 
         const [o, p] = await Promise.all([
           fac.offerte_id
-            ? sb.from("offertes").select("*").eq("id", fac.offerte_id).single()
+            ? sb
+                .from("offertes")
+                .select(
+                  "*, offerte_regels(omschrijving, aantal, prijs_ex_btw, totaal_ex_btw, btw_percentage)"
+                )
+                .eq("id", fac.offerte_id)
+                .single()
             : Promise.resolve({ data: null }),
           fac.project_id
             ? sb.from("projecten").select("*").eq("id", fac.project_id).single()
@@ -942,24 +952,62 @@ export function FactuurPage() {
 
           <div className="flex justify-end px-5 pb-2 sm:px-8">
             <dl className="w-full max-w-xs space-y-2 border border-line bg-[#f7fbf9] px-4 py-3.5">
-              <div className="flex justify-between gap-6 text-sm">
-                <dt className="text-muted">Subtotaal excl. btw</dt>
-                <dd className="tabular-nums text-ink">
-                  {formatEuro(displayEx)}
-                </dd>
-              </div>
-              <div className="flex justify-between gap-6 text-sm">
-                <dt className="text-muted">Btw</dt>
-                <dd className="tabular-nums text-ink">
-                  {formatEuro(displayBtw)}
-                </dd>
-              </div>
-              <div className="flex justify-between gap-6 border-t border-line pt-2">
-                <dt className="text-sm font-semibold text-ink">Totaal</dt>
-                <dd className="font-display text-xl font-semibold tabular-nums text-green-deeper">
-                  {formatEuro(displayInc)}
-                </dd>
-              </div>
+              {(() => {
+                const kortingBlok = factuurKortingSpecificatie({
+                  bedragEx: displayEx,
+                  offerteNetEx: offerte
+                    ? Number(offerte.subtotaal_ex_btw)
+                    : null,
+                  kortingEx: kortingExVanRegels(
+                    offerte?.offerte_regels || []
+                  ),
+                });
+                return (
+                  <>
+                    {kortingBlok ? (
+                      <>
+                        <div className="flex justify-between gap-6 text-sm">
+                          <dt className="text-muted">Subtotaal excl. btw</dt>
+                          <dd className="tabular-nums text-ink">
+                            {formatEuro(kortingBlok.brutoEx)}
+                          </dd>
+                        </div>
+                        <div className="flex justify-between gap-6 text-sm">
+                          <dt className="text-muted">Korting</dt>
+                          <dd className="tabular-nums font-medium text-green-deeper">
+                            {formatEuro(kortingBlok.kortingEx)}
+                          </dd>
+                        </div>
+                        <div className="flex justify-between gap-6 text-sm">
+                          <dt className="text-muted">Totaal excl. btw</dt>
+                          <dd className="tabular-nums text-ink">
+                            {formatEuro(kortingBlok.netEx)}
+                          </dd>
+                        </div>
+                      </>
+                    ) : (
+                      <div className="flex justify-between gap-6 text-sm">
+                        <dt className="text-muted">Subtotaal excl. btw</dt>
+                        <dd className="tabular-nums text-ink">
+                          {formatEuro(displayEx)}
+                        </dd>
+                      </div>
+                    )}
+                    <div className="flex justify-between gap-6 text-sm">
+                      <dt className="text-muted">Btw</dt>
+                      <dd className="tabular-nums text-ink">
+                        {formatEuro(displayBtw)}
+                      </dd>
+                    </div>
+                    <div className="flex justify-between gap-6 border-t border-line pt-2">
+                      <dt className="text-sm font-semibold text-ink">Totaal</dt>
+                      <dd className="font-display text-xl font-semibold tabular-nums text-green-deeper">
+                        {formatEuro(displayInc)}
+                      </dd>
+                    </div>
+                  </>
+                );
+              })()}
             </dl>
           </div>
 

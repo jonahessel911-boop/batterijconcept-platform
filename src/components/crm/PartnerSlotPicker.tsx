@@ -821,26 +821,24 @@ export function PartnerSlotPicker({
         </Collapsible>
       )}
 
-      {soort === "schouw" ? (
-        <label className="mt-3 block text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
-          Of kies zelf datum en tijd
-          <input
-            type="datetime-local"
-            disabled={disabled}
-            value={amsterdamDatetimeLocalValue(value)}
-            onChange={(e) => {
-              const raw = e.target.value;
-              if (!raw) {
-                onChange(null, null);
-                return;
-              }
-              const iso = amsterdamDatetimeLocalToIso(raw);
-              if (iso) onChange(iso, null);
-            }}
-            className="mt-1 w-full border border-border bg-background px-3 py-2 text-sm outline-none focus:border-primary"
-          />
-        </label>
-      ) : null}
+      <label className="mt-3 block text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
+        Of kies zelf datum en tijd
+        <input
+          type="datetime-local"
+          disabled={disabled}
+          value={amsterdamDatetimeLocalValue(value)}
+          onChange={(e) => {
+            const raw = e.target.value;
+            if (!raw) {
+              onChange(null, null);
+              return;
+            }
+            const iso = amsterdamDatetimeLocalToIso(raw);
+            if (iso) onChange(iso, null);
+          }}
+          className="mt-1 w-full border border-border bg-background px-3 py-2 text-sm outline-none focus:border-primary"
+        />
+      </label>
     </div>
   );
 }

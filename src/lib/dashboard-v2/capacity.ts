@@ -93,6 +93,8 @@ type AdviseurIn = {
   actief: boolean;
   rol: string | null;
   email?: string | null;
+  bel_planning?: boolean | null;
+  geblokkeerd?: boolean | null;
   /** Eerste planbare Amsterdam-dag; slots vóór deze datum tellen niet mee. */
   startdatum?: string | null;
   /** Team: ook maandag vanaf huis (geen Daltonlaan / ma 10). */

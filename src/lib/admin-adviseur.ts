@@ -83,7 +83,8 @@ const TIJDELIJK_NIET_PLANBAAR_EMAILS = new Set([
 
 /**
  * Mag in klantgerichte slot-planning (Bel best-slots / capaciteit).
- * Alleen actieve sales-adviseurs. Inactief = niet automatisch inplannen.
+ * `bel_planning` is de schakelaar voor het bel-systeem (los van CRM-login).
+ * Ontbreekt die kolom → val terug op `actief` (oude gedrag).
  * Systeem-Admin, SPARE én CRM-admins (o.a. jona@) uit — die hebben lege
  * agenda's waardoor "vrije" slots ontstaan die in de echte adviseur-agenda
  * bezet zijn.
@@ -93,8 +94,12 @@ export function isPlanbaarAdviseur(a: {
   email?: string | null;
   actief?: boolean | null;
   rol?: string | null;
+  bel_planning?: boolean | null;
+  geblokkeerd?: boolean | null;
 }): boolean {
-  if (a.actief === false) return false;
+  if (a.bel_planning === false) return false;
+  if (a.bel_planning == null && a.actief === false) return false;
+  if (a.geblokkeerd === true && a.bel_planning !== true) return false;
   if (isAdminAdviseur(a)) return false;
   if (isSpareAdviseur(a)) return false;
   if (isAdminEmail(a.email)) return false;
@@ -105,6 +110,23 @@ export function isPlanbaarAdviseur(a: {
     return false;
   }
   return true;
+}
+
+/**
+ * Sales-/maandleaderboard: alleen actieve, niet-geblokkeerde adviseurs.
+ * `bel_planning` mag iemand in de bel-agenda houden; dat telt hier niet.
+ */
+export function isLeaderboardAdviseur(a: {
+  naam: string;
+  email?: string | null;
+  actief?: boolean | null;
+  rol?: string | null;
+  bel_planning?: boolean | null;
+  geblokkeerd?: boolean | null;
+}): boolean {
+  if (a.actief === false) return false;
+  if (a.geblokkeerd === true) return false;
+  return isPlanbaarAdviseur(a);
 }
 
 /** Zoekt de Admin-adviseur (via ADMIN_EMAIL, anders naam "Admin"). */

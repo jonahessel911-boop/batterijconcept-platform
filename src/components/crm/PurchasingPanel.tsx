@@ -2,8 +2,11 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
-import { formatDateShort, formatEuro, formatSlotLabelNl } from "@/lib/format";
+import { FileText, Search, ShoppingCart } from "lucide-react";
+import { formatEuro, formatSlotLabelNl } from "@/lib/format";
 import {
+  INKOOP_BESTEL_BEVESTIGING_KEY,
+  INKOOP_BESTEL_BEVESTIGING_TEKST,
   INKOOP_LEVERANCIER,
   INKOOP_LEVERANCIER_STATUS_LABEL,
   type InkoopLeverancierStatus,
@@ -12,59 +15,46 @@ import {
 import { bestelDeadlineVoorInstallatie } from "@/lib/inkoop-sla";
 import { apexProductUrl } from "@/lib/apex-product-url";
 import { inkoopProductImageFor } from "@/lib/inkoop-product-images";
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import {
+  Card,
+  CardContent,
+  CardDescription,
+  CardHeader,
+  CardTitle,
+} from "@/components/ui/card";
+import { Input } from "@/components/ui/input";
+import {
+  NativeSelect,
+  NativeSelectOption,
+} from "@/components/ui/native-select";
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from "@/components/ui/table";
+import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import {
+  Sheet,
+  SheetContent,
+  SheetDescription,
+  SheetFooter,
+  SheetHeader,
+  SheetTitle,
+} from "@/components/ui/sheet";
+import { PurchasingShop } from "./PurchasingShop";
+import type {
+  PurchasingDesk,
+  PurchasingOrder,
+  PurchasingSchouwInfo,
+} from "./purchasing-types";
 
-type OrderLine = {
-  key: string;
-  label: string;
-  sku: string | null;
-  aantal: number;
-  inkoop_ex_btw: number;
-  status: InkoopRegelStatus;
-  notitie?: string | null;
-};
-
-type SchouwInfo = {
-  kind: "voltooid" | "dag" | "week" | "niet";
-  at: string | null;
-  week_label: string | null;
-  formulier_url: string | null;
-  formulier_naam: string | null;
-};
-
-type PurchasingOrder = {
-  id: string;
-  project_nummer: string | null;
-  status: string;
-  titel: string | null;
-  leveradres: string | null;
-  leverancier: string;
-  klant: string;
-  lead_number: string | null;
-  offerte_nummer: string | null;
-  updated_at: string;
-  inkoop_totaal_ex_btw: number;
-  te_bestellen_ex_btw?: number;
-  besteld_ex_btw?: number;
-  inkoop_leverancier_status: InkoopLeverancierStatus;
-  inkoop_leverancier_betaald_op: string | null;
-  klant_betaling?: {
-    pct: number;
-    betaald_inc: number;
-    order_inc: number;
-    volledig: boolean;
-  } | null;
-  schouw: SchouwInfo;
-  installatie_at: string | null;
-  materiaal_leverdatum: string | null;
-  inkoop_extra_notities?: string | null;
-  summary: {
-    te_kopen: number;
-    besteld: number;
-    geleverd: number;
-    overall: InkoopRegelStatus | "deels";
-  };
-  items: OrderLine[];
-};
+type SchouwInfo = PurchasingSchouwInfo;
+type Desk = PurchasingDesk;
 
 function defaultLeverdatumYmd(daysAhead = 7): string {
   const d = new Date();
@@ -88,12 +78,6 @@ function askLeverdatum(existingIso?: string | null): string | null {
   }
   return trimmed;
 }
-
-/** Werkvoorraad-fases van de inkoopdesk. */
-type Desk = "bestellen" | "pipeline" | "onderweg" | "geleverd" | "te_betalen";
-
-const ROW =
-  "flex w-full flex-col gap-2 md:grid md:w-auto md:grid-cols-[7.5rem_minmax(0,1fr)_minmax(0,1.05fr)_minmax(0,1.05fr)_6.5rem_3.5rem_6.5rem] md:items-center md:gap-x-3 md:gap-y-0";
 
 function defaultSchouw(): SchouwInfo {
   return {
@@ -252,9 +236,11 @@ export function PurchasingPanel() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [okMsg, setOkMsg] = useState<string | null>(null);
+  const [mainTab, setMainTab] = useState<"overzicht" | "winkel">("overzicht");
   const [desk, setDesk] = useState<Desk>("bestellen");
   const [q, setQ] = useState("");
   const [openId, setOpenId] = useState<string | null>(null);
+  const [shopProjectId, setShopProjectId] = useState<string | null>(null);
   const [busyKey, setBusyKey] = useState<string | null>(null);
   const [autoSwitched, setAutoSwitched] = useState(false);
 
@@ -376,16 +362,17 @@ export function PurchasingPanel() {
 
   async function persistChecks(
     order: PurchasingOrder,
-    nextChecks: Record<string, InkoopRegelStatus>,
+    nextChecks: Record<string, InkoopRegelStatus | string>,
     opts?: {
       reload?: boolean;
       askLeverdatum?: boolean;
+      leverdatumYmd?: string;
       leverancierStatus?: InkoopLeverancierStatus;
     }
   ) {
     const items = order.items.map((i) => ({
       ...i,
-      status: nextChecks[i.key] || i.status,
+      status: (nextChecks[i.key] as InkoopRegelStatus) || i.status,
     }));
     const activeItems = items.filter((i) => i.status !== "geannuleerd");
     const allBesteldOrMore =
@@ -400,8 +387,9 @@ export function PurchasingPanel() {
       order.summary.overall === "besteld" ||
       order.summary.overall === "geleverd";
 
-    let leverdatumYmd: string | null | undefined;
+    let leverdatumYmd: string | null | undefined = opts?.leverdatumYmd;
     if (
+      leverdatumYmd === undefined &&
       allBesteldOrMore &&
       !allGeleverd &&
       (opts?.askLeverdatum || !wasAlreadyBesteld || !order.materiaal_leverdatum)
@@ -610,6 +598,81 @@ export function PurchasingPanel() {
     }
   }
 
+  async function checkoutFromShop(input: {
+    order: PurchasingOrder;
+    itemKeys: string[];
+    klantNaam: string;
+    leveradres: string;
+    leverdatumYmd: string;
+    leverancierStatus: InkoopLeverancierStatus;
+    handtekening: string;
+    bevestigd: boolean;
+  }) {
+    if (!input.bevestigd) {
+      setError("Bevestig dat je het schouwrapport en de inkoop hebt doorgenomen.");
+      return;
+    }
+    if (!input.handtekening) {
+      setError("Zet je krabbel om de bestelling te plaatsen.");
+      return;
+    }
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(input.leverdatumYmd)) {
+      setError("Vul een geldige leverdatum in.");
+      return;
+    }
+    setBusyKey(`${input.order.id}:checkout`);
+    setError(null);
+    setOkMsg(null);
+    try {
+      const keys = new Set(input.itemKeys);
+      const nextChecks: Record<string, InkoopRegelStatus | string> = {};
+      for (const item of input.order.items) {
+        nextChecks[item.key] =
+          item.status === "geannuleerd"
+            ? "geannuleerd"
+            : keys.has(item.key)
+              ? "besteld"
+              : item.status;
+      }
+      nextChecks[INKOOP_BESTEL_BEVESTIGING_KEY] = JSON.stringify({
+        at: new Date().toISOString(),
+        klant: input.klantNaam.trim(),
+        leveradres: input.leveradres.trim(),
+        tekst: INKOOP_BESTEL_BEVESTIGING_TEKST,
+        handtekening: input.handtekening,
+      });
+      await persistChecks(input.order, nextChecks, {
+        reload: true,
+        leverdatumYmd: input.leverdatumYmd,
+        leverancierStatus: input.leverancierStatus,
+      });
+      if (input.leveradres.trim() && input.leveradres.trim() !== input.order.leveradres) {
+        await fetch(`/api/projecten/${input.order.id}`, {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ leveradres: input.leveradres.trim() }),
+        }).catch(() => null);
+      }
+      setMainTab("overzicht");
+      setDesk("onderweg");
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Bestellen mislukt");
+    } finally {
+      setBusyKey(null);
+    }
+  }
+
+  function openWinkel(orderId: string) {
+    setShopProjectId(orderId);
+    setMainTab("winkel");
+    setOpenId(null);
+  }
+
+  const openOrder = useMemo(
+    () => orders.find((o) => o.id === openId) || null,
+    [orders, openId]
+  );
+
   const emptyCopy: Record<Desk, string> = {
     bestellen:
       "Niets te bestellen. Orders komen hier zodra de installatie is ingepland. Bestellen doe je 5 werkdagen vóór die datum.",
@@ -621,565 +684,428 @@ export function PurchasingPanel() {
   };
 
   return (
-    <div className="border border-line bg-white">
-      <div className="flex flex-wrap items-end justify-between gap-3 border-b border-line px-4 py-3 sm:px-5">
-        <div>
-          <h2 className="font-display text-xl font-semibold text-ink">
-            Purchasing
-          </h2>
-          <p className="mt-0.5 text-sm text-muted">
-            Materiaal inkopen bij {leverancier} · status en levering
-          </p>
-        </div>
-        <div className="flex w-full flex-wrap items-center gap-2 sm:w-auto">
-          <input
-            type="search"
-            value={q}
-            onChange={(e) => setQ(e.target.value)}
-            placeholder="Zoek project of klant…"
-            className="w-full min-w-0 border border-line bg-white px-2.5 py-1.5 text-xs text-ink outline-none placeholder:text-muted focus:border-green sm:w-56"
-          />
-          <button
-            type="button"
-            onClick={() => void load()}
-            className="border border-line bg-white px-3 py-1.5 text-xs font-semibold text-muted hover:bg-wash"
-          >
-            Vernieuwen
-          </button>
-        </div>
-      </div>
-
-      {wfForecast ? (
-        <div className="border-b border-line bg-[#F7FAF8] px-4 py-3.5 sm:px-5">
+    <div className="space-y-4">
+      <Card className="bg-white shadow-none">
+        <CardHeader className="border-b">
           <div className="flex flex-wrap items-start justify-between gap-3">
-            <div className="min-w-0">
-              <p className="text-[10px] font-semibold uppercase tracking-wide text-muted">
-                Verwacht binnen 5 weken · Warmtefonds
-              </p>
-              <p className="mt-0.5 text-xs text-muted">
-                Installatie {formatDateShort(`${wfForecast.van}T12:00:00`)} –{" "}
-                {formatDateShort(`${wfForecast.tot}T12:00:00`)}
-                {wfForecast.orders > 0
-                  ? ` · ${wfForecast.orders} WF-order${wfForecast.orders === 1 ? "" : "s"}`
-                  : " · geen WF-installaties gepland"}
-              </p>
+            <div>
+              <CardTitle>Purchasing</CardTitle>
+              <CardDescription>
+                Materiaal bij {leverancier} · gekoppeld aan projecten
+              </CardDescription>
+            </div>
+            <div className="flex flex-wrap items-center gap-2">
+              {mainTab === "overzicht" ? (
+                <div className="relative">
+                  <Search className="pointer-events-none absolute top-1/2 left-2.5 size-3.5 -translate-y-1/2 text-muted-foreground" />
+                  <Input
+                    type="search"
+                    value={q}
+                    onChange={(e) => setQ(e.target.value)}
+                    placeholder="Zoek project of klant…"
+                    className="w-56 pl-8"
+                  />
+                </div>
+              ) : null}
+              <Button type="button" variant="outline" onClick={() => void load()}>
+                Vernieuwen
+              </Button>
             </div>
           </div>
-          <div className="mt-3 grid gap-3 sm:grid-cols-2">
-            <div className="border border-line bg-white px-3.5 py-3">
-              <p className="text-[10px] font-semibold uppercase tracking-wide text-muted">
-                Omzet (WF)
+          <Tabs
+            value={mainTab}
+            onValueChange={(id) => setMainTab(id as "overzicht" | "winkel")}
+            className="mt-2"
+          >
+            <TabsList>
+              <TabsTrigger value="overzicht">Overzicht</TabsTrigger>
+              <TabsTrigger value="winkel">
+                Winkel
+                <ShoppingCart className="size-3.5" />
+              </TabsTrigger>
+            </TabsList>
+          </Tabs>
+        </CardHeader>
+        {wfForecast ? (
+          <CardContent className="grid gap-3 border-b py-4 sm:grid-cols-2">
+            <div>
+              <p className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
+                Omzet (WF · 5 wkn)
               </p>
-              <p className="mt-1 font-display text-xl font-semibold tabular-nums text-ink">
+              <p className="mt-1 font-display text-xl font-semibold tabular-nums">
                 {formatEuro(wfForecast.omzet_ex_btw)}
               </p>
-              <p className="mt-0.5 text-[11px] tabular-nums text-muted">
+              <p className="text-[11px] text-muted-foreground">
                 {formatEuro(wfForecast.omzet_inc_btw)} incl. btw
               </p>
             </div>
-            <div className="border border-line bg-white px-3.5 py-3">
-              <p className="text-[10px] font-semibold uppercase tracking-wide text-muted">
+            <div>
+              <p className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
                 Uitgaand purchasing
               </p>
-              <p className="mt-1 font-display text-xl font-semibold tabular-nums text-ink">
+              <p className="mt-1 font-display text-xl font-semibold tabular-nums">
                 {formatEuro(wfForecast.inkoop_te_bestellen_ex_btw)}
               </p>
-              <p className="mt-0.5 text-[11px] tabular-nums text-muted">
-                te bestellen · totaal inkoop{" "}
-                {formatEuro(wfForecast.inkoop_ex_btw)}
-                {wfForecast.inkoop_besteld_ex_btw > 0
-                  ? ` · al besteld ${formatEuro(wfForecast.inkoop_besteld_ex_btw)}`
-                  : ""}
+              <p className="text-[11px] text-muted-foreground">
+                te bestellen · totaal {formatEuro(wfForecast.inkoop_ex_btw)}
               </p>
             </div>
-          </div>
-        </div>
-      ) : null}
-
-      <div className="flex flex-wrap border-b border-line">
-        {(
-          [
-            ["bestellen", "Te bestellen", counts.bestellen],
-            ["pipeline", "Pipeline", counts.pipeline],
-            ["onderweg", "Onderweg", counts.onderweg],
-            ["te_betalen", "Nog te betalen", counts.te_betalen],
-            ["geleverd", "Geleverd", counts.geleverd],
-          ] as const
-        ).map(([id, label, count]) => {
-          const active = desk === id;
-          return (
-            <button
-              key={id}
-              type="button"
-              onClick={() => {
-                setDesk(id);
-                setOpenId(null);
-              }}
-              className={[
-                "relative px-4 py-2.5 text-sm font-semibold transition-colors",
-                active ? "text-ink" : "text-muted hover:bg-wash hover:text-ink",
-              ].join(" ")}
-            >
-              {label}
-              <span
-                className={[
-                  "ml-1.5 tabular-nums",
-                  active
-                    ? "text-ink"
-                    : (id === "bestellen" || id === "te_betalen") && count > 0
-                      ? id === "te_betalen"
-                        ? "text-[#C45A12]"
-                        : "text-green-dark"
-                      : "text-muted",
-                ].join(" ")}
-              >
-                {count}
-              </span>
-              {active ? (
-                <span
-                  className={[
-                    "absolute inset-x-0 bottom-0 h-0.5",
-                    id === "te_betalen" ? "bg-[#C45A12]" : "bg-green",
-                  ].join(" ")}
-                  aria-hidden
-                />
-              ) : null}
-            </button>
-          );
-        })}
-      </div>
+          </CardContent>
+        ) : null}
+      </Card>
 
       {(error || okMsg) && (
-        <div className="space-y-1 border-b border-line px-4 py-2.5 sm:px-5">
-          {error && (
-            <p className="text-xs font-semibold text-[#C45A12]">{error}</p>
-          )}
-          {okMsg && (
-            <p className="text-xs font-semibold text-green-dark">{okMsg}</p>
-          )}
-        </div>
+        <p
+          className={
+            error
+              ? "text-sm font-medium text-[#C45A12]"
+              : "text-sm font-medium text-green-dark"
+          }
+        >
+          {error || okMsg}
+        </p>
       )}
 
-      {loading ? (
-        <p className="px-5 py-12 text-center text-sm text-muted">Laden…</p>
-      ) : filtered.length === 0 ? (
-        <p className="px-5 py-12 text-center text-sm text-muted">
-          {q.trim()
-            ? "Geen resultaten voor deze zoekopdracht."
-            : emptyCopy[desk]}
-        </p>
+      {mainTab === "winkel" ? (
+        <PurchasingShop
+          orders={orders}
+          selectedId={shopProjectId}
+          onSelectId={setShopProjectId}
+          leverancier={leverancier}
+          busy={Boolean(busyKey?.endsWith(":checkout"))}
+          onCheckout={checkoutFromShop}
+        />
       ) : (
-        <div className="md:overflow-x-auto">
-          <div className="md:min-w-[920px]">
-            <div
-              className={[
-                "hidden border-b border-line bg-wash/40 px-4 py-2 text-[10px] font-semibold uppercase tracking-wide text-muted sm:px-5 md:grid md:grid-cols-[7.5rem_minmax(0,1fr)_minmax(0,1.05fr)_minmax(0,1.05fr)_6.5rem_3.5rem_6.5rem] md:items-center md:gap-x-3",
-              ].join(" ")}
+        <Card className="bg-white shadow-none">
+          <CardHeader className="border-b pb-3">
+            <Tabs
+              value={desk}
+              onValueChange={(id) => {
+                setDesk(id as Desk);
+                setOpenId(null);
+              }}
             >
-              <span>Project</span>
-              <span>Klant</span>
-              <span>Schouw</span>
-              <span>Installatie</span>
-              <span>Betaling</span>
-              <span className="text-right">Open</span>
-              <span className="text-right">Bedrag</span>
-            </div>
-
-            <ul>
-              {filtered.map((order) => {
-                const open = openId === order.id;
-                const euro =
-                  desk === "bestellen" || desk === "pipeline"
-                    ? openEuro(order)
-                    : desk === "te_betalen"
-                      ? order.besteld_ex_btw ?? order.inkoop_totaal_ex_btw
-                      : order.inkoop_totaal_ex_btw;
-                const canOrder = Boolean(order.installatie_at);
-                const badge = levBadge(order.inkoop_leverancier_status);
-
-                return (
-                  <li key={order.id} className="border-b border-line">
-                    <button
-                      type="button"
-                      onClick={() =>
-                        setOpenId((cur) =>
-                          cur === order.id ? null : order.id
-                        )
+              <TabsList variant="line" className="w-full justify-start">
+                {(
+                  [
+                    ["bestellen", "Te bestellen", counts.bestellen],
+                    ["pipeline", "Pipeline", counts.pipeline],
+                    ["onderweg", "Onderweg", counts.onderweg],
+                    ["te_betalen", "Nog te betalen", counts.te_betalen],
+                    ["geleverd", "Geleverd", counts.geleverd],
+                  ] as const
+                ).map(([id, label, count]) => (
+                  <TabsTrigger key={id} value={id}>
+                    {label}
+                    <Badge
+                      variant={
+                        (id === "bestellen" || id === "te_betalen") && count > 0
+                          ? "destructive"
+                          : "secondary"
                       }
-                      className={[
-                        ROW,
-                        "w-full px-4 py-3 text-left hover:bg-wash sm:px-5",
-                      ].join(" ")}
                     >
-                      <div className="min-w-0">
-                        <p className="text-[10px] font-semibold uppercase tracking-wide text-muted md:hidden">
-                          Project
-                        </p>
-                        <p className="truncate font-display text-sm font-semibold text-ink">
-                          {order.project_nummer || "Project"}
-                        </p>
-                        {order.offerte_nummer ? (
-                          <p className="truncate text-xs text-muted">
-                            {order.offerte_nummer}
+                      {count}
+                    </Badge>
+                  </TabsTrigger>
+                ))}
+              </TabsList>
+            </Tabs>
+          </CardHeader>
+          <CardContent className="px-0">
+            {loading ? (
+              <p className="px-5 py-12 text-center text-sm text-muted-foreground">
+                Laden…
+              </p>
+            ) : filtered.length === 0 ? (
+              <p className="px-5 py-12 text-center text-sm text-muted-foreground">
+                {q.trim()
+                  ? "Geen resultaten voor deze zoekopdracht."
+                  : emptyCopy[desk]}
+              </p>
+            ) : (
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead>Project</TableHead>
+                    <TableHead>Klant</TableHead>
+                    <TableHead>Schouw</TableHead>
+                    <TableHead>Installatie</TableHead>
+                    <TableHead>Betaling</TableHead>
+                    <TableHead className="text-right">Open</TableHead>
+                    <TableHead className="text-right">Bedrag</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {filtered.map((order) => {
+                    const euro =
+                      desk === "bestellen" || desk === "pipeline"
+                        ? openEuro(order)
+                        : desk === "te_betalen"
+                          ? order.besteld_ex_btw ?? order.inkoop_totaal_ex_btw
+                          : order.inkoop_totaal_ex_btw;
+                    const badge = levBadge(order.inkoop_leverancier_status);
+                    const hint = installatieHint(order);
+                    return (
+                      <TableRow
+                        key={order.id}
+                        className="cursor-pointer"
+                        onClick={() =>
+                          setOpenId((cur) =>
+                            cur === order.id ? null : order.id
+                          )
+                        }
+                      >
+                        <TableCell>
+                          <p className="font-medium">
+                            {order.project_nummer || "Project"}
                           </p>
-                        ) : null}
-                      </div>
-                      <div className="min-w-0">
-                        <p className="text-[10px] font-semibold uppercase tracking-wide text-muted md:hidden">
-                          Klant
-                        </p>
-                        <p className="truncate text-sm text-ink">{order.klant}</p>
-                        {order.leveradres ? (
-                          <p className="truncate text-xs text-muted">
-                            {order.leveradres}
-                          </p>
-                        ) : null}
-                      </div>
-                      <div className="min-w-0">
-                        <p className="text-[10px] font-semibold uppercase tracking-wide text-muted md:hidden">
-                          Schouw
-                        </p>
-                        <p className="truncate text-sm font-medium text-ink">
-                          {schouwWhen(order.schouw)}
-                        </p>
-                        <p
-                          className={[
-                            "truncate text-xs font-semibold",
-                            order.schouw.kind === "voltooid"
-                              ? "text-green-dark"
-                              : order.schouw.kind === "niet"
-                                ? "text-muted"
-                                : "text-[#C45A12]",
-                          ].join(" ")}
-                        >
-                          {schouwHint(order.schouw)}
-                        </p>
-                      </div>
-                      <div className="min-w-0">
-                        <p className="text-[10px] font-semibold uppercase tracking-wide text-muted md:hidden">
-                          Installatie
-                        </p>
-                        <p className="truncate text-sm font-medium text-ink">
-                          {installatieWhen(order.installatie_at)}
-                        </p>
-                        {(() => {
-                          const hint = installatieHint(order);
-                          return (
-                            <p
-                              className={[
-                                "truncate text-xs font-semibold",
-                                hint.tone === "ok"
-                                  ? "text-green-dark"
-                                  : hint.tone === "warn"
-                                    ? "text-[#C45A12]"
-                                    : "text-muted",
-                              ].join(" ")}
-                            >
-                              {hint.text}
+                          {order.offerte_nummer ? (
+                            <p className="text-xs text-muted-foreground">
+                              {order.offerte_nummer}
                             </p>
-                          );
-                        })()}
-                      </div>
-                      <div className="min-w-0">
-                        <p className="text-[10px] font-semibold uppercase tracking-wide text-muted md:hidden">
-                          Betaling
-                        </p>
-                        {desk === "pipeline" && order.klant_betaling ? (
-                          <KlantBetalingBar betaling={order.klant_betaling} />
-                        ) : (
+                          ) : null}
+                        </TableCell>
+                        <TableCell>
+                          <p>{order.klant}</p>
+                          {order.leveradres ? (
+                            <p className="max-w-[16rem] truncate text-xs text-muted-foreground">
+                              {order.leveradres}
+                            </p>
+                          ) : null}
+                        </TableCell>
+                        <TableCell>
+                          <p className="text-sm">{schouwWhen(order.schouw)}</p>
                           <p
-                            className={[
-                              "truncate text-xs font-semibold",
-                              badge.className,
-                            ].join(" ")}
+                            className={
+                              order.schouw.kind === "voltooid"
+                                ? "text-xs font-medium text-green-dark"
+                                : "text-xs text-muted-foreground"
+                            }
                           >
-                            {badge.label}
+                            {schouwHint(order.schouw)}
                           </p>
-                        )}
-                      </div>
-                      <div className="flex items-baseline justify-between text-sm text-ink md:block md:text-right">
-                        <span className="text-[10px] font-semibold uppercase tracking-wide text-muted md:hidden">
-                          Open
-                        </span>
-                        <span className="tabular-nums">
+                        </TableCell>
+                        <TableCell>
+                          <p className="text-sm">
+                            {installatieWhen(order.installatie_at)}
+                          </p>
+                          <p
+                            className={
+                              hint.tone === "warn"
+                                ? "text-xs font-medium text-[#C45A12]"
+                                : hint.tone === "ok"
+                                  ? "text-xs text-green-dark"
+                                  : "text-xs text-muted-foreground"
+                            }
+                          >
+                            {hint.text}
+                          </p>
+                        </TableCell>
+                        <TableCell>
+                          {desk === "pipeline" && order.klant_betaling ? (
+                            <KlantBetalingBar betaling={order.klant_betaling} />
+                          ) : (
+                            <span className={`text-xs font-medium ${badge.className}`}>
+                              {badge.label}
+                            </span>
+                          )}
+                        </TableCell>
+                        <TableCell className="text-right tabular-nums">
                           {order.summary.te_kopen > 0
                             ? order.summary.te_kopen
                             : "—"}
-                        </span>
-                      </div>
-                      <div className="text-right">
-                        <p className="font-display text-sm font-semibold tabular-nums text-ink">
+                        </TableCell>
+                        <TableCell className="text-right font-medium tabular-nums">
                           {formatEuro(euro)}
-                        </p>
-                        <p className="text-[10px] text-muted">
-                          {open ? "▾" : "▸"} {order.items.length}
-                        </p>
-                      </div>
-                    </button>
+                        </TableCell>
+                      </TableRow>
+                    );
+                  })}
+                </TableBody>
+              </Table>
+            )}
+          </CardContent>
+        </Card>
+      )}
 
-                    {open ? (
-                      <div className="border-t border-line bg-wash/30 px-4 py-3 sm:px-5">
-                        <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
-                          <div className="flex flex-wrap items-center gap-3 text-xs">
-                            <Link
-                              href={`/projecten/${order.id}?from=purchasing`}
-                              className="font-semibold text-green-dark underline-offset-2 hover:underline"
-                            >
-                              Project
-                            </Link>
-                            {order.schouw.formulier_url ? (
-                              <a
-                                href={order.schouw.formulier_url}
-                                target="_blank"
-                                rel="noreferrer"
-                                className="font-semibold text-green-dark underline-offset-2 hover:underline"
-                              >
-                                Schouw-PDF
-                              </a>
+      <Sheet
+        open={Boolean(openOrder)}
+        onOpenChange={(open) => {
+          if (!open) setOpenId(null);
+        }}
+      >
+        <SheetContent side="right" className="sm:max-w-lg" showCloseButton>
+          {openOrder ? (
+            <>
+              <SheetHeader>
+                <SheetTitle>
+                  {openOrder.project_nummer || "Project"} · {openOrder.klant}
+                </SheetTitle>
+                <SheetDescription>
+                  {openOrder.leveradres || "Geen leveradres"}
+                </SheetDescription>
+              </SheetHeader>
+              <div className="flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto px-4">
+                <div className="flex flex-wrap gap-2 text-sm">
+                  <Link
+                    href={`/projecten/${openOrder.id}?from=purchasing`}
+                    className="font-medium text-green-dark underline-offset-2 hover:underline"
+                  >
+                    Project
+                  </Link>
+                  {openOrder.schouw.formulier_url ? (
+                    <a
+                      href={openOrder.schouw.formulier_url}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="inline-flex items-center gap-1 font-medium text-green-dark underline-offset-2 hover:underline"
+                    >
+                      <FileText className="size-3.5" />
+                      Schouw-PDF
+                    </a>
+                  ) : (
+                    <span className="text-muted-foreground">Geen schouw-PDF</span>
+                  )}
+                </div>
+                {openOrder.inkoop_extra_notities ? (
+                  <p className="rounded-md bg-[#FFF8D6] px-2 py-1.5 text-xs">
+                    {openOrder.inkoop_extra_notities}
+                  </p>
+                ) : null}
+                <Table>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead>Product</TableHead>
+                      <TableHead className="text-right">Aantal</TableHead>
+                      <TableHead className="text-right">Ex btw</TableHead>
+                      <TableHead className="text-right">Status</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {openOrder.items.map((item) => {
+                      const foto = inkoopProductImageFor(item.sku, item.label);
+                      const cancelled = item.status === "geannuleerd";
+                      return (
+                        <TableRow key={item.key} className={cancelled ? "opacity-50" : ""}>
+                          <TableCell>
+                            <div className="flex items-center gap-2">
+                              <div className="h-10 w-10 shrink-0 overflow-hidden rounded-md border bg-[#0a0a0a]">
+                                {foto ? (
+                                  // eslint-disable-next-line @next/next/no-img-element
+                                  <img
+                                    src={foto.imageSrc}
+                                    alt=""
+                                    className="h-full w-full object-contain"
+                                  />
+                                ) : (
+                                  <span className="flex h-full w-full items-center justify-center text-xs text-muted-foreground">
+                                    {(item.label || "?").charAt(0)}
+                                  </span>
+                                )}
+                              </div>
+                              <div className="min-w-0">
+                                <p className={cancelled ? "line-through" : "font-medium"}>
+                                  {foto?.naam || item.label}
+                                </p>
+                                <p className="text-xs text-muted-foreground">
+                                  {item.sku || "—"} · {item.status}
+                                </p>
+                                {!cancelled ? (
+                                  <a
+                                    href={apexProductUrl(item.sku, item.label)}
+                                    target="_blank"
+                                    rel="noopener noreferrer"
+                                    className="text-xs font-medium text-green-dark hover:underline"
+                                  >
+                                    Apex
+                                  </a>
+                                ) : null}
+                              </div>
+                            </div>
+                          </TableCell>
+                          <TableCell className="text-right tabular-nums">
+                            {item.aantal}×
+                          </TableCell>
+                          <TableCell className="text-right tabular-nums">
+                            {formatEuro(item.inkoop_ex_btw)}
+                          </TableCell>
+                          <TableCell className="text-right">
+                            {cancelled ? (
+                              <span className="text-xs text-muted-foreground">
+                                Vervallen
+                              </span>
                             ) : (
-                              <span className="text-muted">Geen schouw-PDF</span>
-                            )}
-                            {!canOrder ? (
-                              <span className="text-muted">
-                                Bestellen pas als de installatie gepland is
-                              </span>
-                            ) : null}
-                            {order.materiaal_leverdatum ? (
-                              <span className="font-semibold text-[#EA580C]">
-                                Levering{" "}
-                                {order.materiaal_leverdatum.slice(0, 10)}
-                              </span>
-                            ) : null}
-                          </div>
-                          <div className="flex flex-wrap gap-2">
-                            {canOrder && isOpenInkoop(order) ? (
-                              <>
-                                <button
-                                  type="button"
-                                  disabled={busyKey === `${order.id}:all`}
-                                  onClick={() =>
-                                    void markAll(order, "besteld", "op_krediet")
-                                  }
-                                  className="bg-orange px-3 py-1.5 text-xs font-semibold text-white disabled:opacity-60"
-                                >
-                                  Besteld · op krediet
-                                </button>
-                                <button
-                                  type="button"
-                                  disabled={busyKey === `${order.id}:all`}
-                                  onClick={() =>
-                                    void markAll(order, "besteld", "betaald")
-                                  }
-                                  className="border border-green bg-white px-3 py-1.5 text-xs font-semibold text-green-dark disabled:opacity-60"
-                                >
-                                  Besteld · betaald
-                                </button>
-                              </>
-                            ) : null}
-                            {order.inkoop_leverancier_status === "op_krediet" ? (
-                              <button
-                                type="button"
-                                disabled={busyKey === `${order.id}:lev`}
-                                onClick={() =>
-                                  void setLeverancierBetaling(order, "betaald")
+                              <NativeSelect
+                                size="sm"
+                                value={item.status}
+                                disabled={
+                                  busyKey === `${openOrder.id}:${item.key}`
                                 }
-                                className="bg-green px-3 py-1.5 text-xs font-semibold text-white disabled:opacity-60"
-                              >
-                                Markeer als betaald
-                              </button>
-                            ) : null}
-                            {order.inkoop_leverancier_status === "betaald" &&
-                            (order.summary.overall === "besteld" ||
-                              order.summary.overall === "geleverd" ||
-                              order.summary.overall === "deels") ? (
-                              <button
-                                type="button"
-                                disabled={busyKey === `${order.id}:lev`}
-                                onClick={() =>
-                                  void setLeverancierBetaling(
-                                    order,
-                                    "op_krediet"
+                                onClick={(e) => e.stopPropagation()}
+                                onChange={(e) =>
+                                  void setLineStatus(
+                                    openOrder,
+                                    item.key,
+                                    e.target.value as InkoopRegelStatus
                                   )
                                 }
-                                className="border border-line bg-white px-3 py-1.5 text-xs font-semibold text-muted disabled:opacity-60"
                               >
-                                Zet op krediet
-                              </button>
-                            ) : null}
-                            {order.summary.overall === "besteld" &&
-                            !order.materiaal_leverdatum ? (
-                              <button
-                                type="button"
-                                disabled={busyKey === `${order.id}:all`}
-                                onClick={() => void markAll(order, "besteld")}
-                                className="border border-[#EA580C] bg-white px-3 py-1.5 text-xs font-semibold text-[#EA580C] disabled:opacity-60"
-                              >
-                                Zet leverdatum
-                              </button>
-                            ) : null}
-                            {order.summary.overall === "besteld" ||
-                            order.summary.overall === "deels" ? (
-                              <button
-                                type="button"
-                                disabled={busyKey === `${order.id}:all`}
-                                onClick={() => void markAll(order, "geleverd")}
-                                className="bg-green px-3 py-1.5 text-xs font-semibold text-white disabled:opacity-60"
-                              >
-                                Alles geleverd
-                              </button>
-                            ) : null}
-                          </div>
-                        </div>
-
-                        <div className="border border-line bg-white">
-                          <div className="hidden grid-cols-[minmax(0,1fr)_3.5rem_5.5rem_8.5rem] gap-x-3 border-b border-line px-3 py-1.5 text-[10px] font-semibold uppercase tracking-wide text-muted sm:grid">
-                            <span>Product</span>
-                            <span className="text-right">Aantal</span>
-                            <span className="text-right">Ex btw</span>
-                            <span className="text-right">Regel</span>
-                          </div>
-                          <ul className="divide-y divide-line">
-                            {order.inkoop_extra_notities ? (
-                              <p className="border-b border-line bg-[#FFF8D6]/60 px-3 py-2 text-xs text-ink">
-                                <span className="font-semibold">
-                                  Schouw · inkoop:{" "}
-                                </span>
-                                {order.inkoop_extra_notities}
-                              </p>
-                            ) : null}
-                            {order.items.map((item) => {
-                              const foto = inkoopProductImageFor(
-                                item.sku,
-                                item.label
-                              );
-                              const cancelled = item.status === "geannuleerd";
-                              return (
-                              <li
-                                key={item.key}
-                                className={[
-                                  "grid grid-cols-1 gap-y-1 px-3 py-2 sm:grid-cols-[minmax(0,1fr)_3.5rem_5.5rem_8.5rem] sm:items-center sm:gap-x-3 sm:gap-y-0",
-                                  cancelled ? "opacity-60" : "",
-                                ].join(" ")}
-                              >
-                                <div className="flex min-w-0 items-center gap-2.5">
-                                  {foto ? (
-                                    <div
-                                      className={[
-                                        "flex h-11 w-11 shrink-0 items-center justify-center overflow-hidden border border-line bg-[#0a0a0a]",
-                                        cancelled ? "opacity-50" : "",
-                                      ].join(" ")}
-                                    >
-                                      {/* eslint-disable-next-line @next/next/no-img-element */}
-                                      <img
-                                        src={foto.imageSrc}
-                                        alt=""
-                                        className="h-full w-full object-contain"
-                                      />
-                                    </div>
-                                  ) : null}
-                                  <div className="min-w-0">
-                                  <p
-                                    className={[
-                                      "truncate text-sm font-medium",
-                                      cancelled
-                                        ? "text-muted line-through"
-                                        : "text-ink",
-                                    ].join(" ")}
-                                  >
-                                    {foto?.naam || item.label}
-                                  </p>
-                                  {item.notitie ? (
-                                    <p className="mt-0.5 text-[11px] font-medium text-[#C45A12]">
-                                      {item.notitie}
-                                    </p>
-                                  ) : null}
-                                  <div className="mt-0.5 flex flex-wrap items-center gap-x-2 gap-y-0.5">
-                                    {item.sku ? (
-                                      <span className="truncate text-xs text-muted">
-                                        {item.sku}
-                                      </span>
-                                    ) : null}
-                                    {!cancelled ? (
-                                      <a
-                                        href={apexProductUrl(
-                                          item.sku,
-                                          item.label
-                                        )}
-                                        target="_blank"
-                                        rel="noopener noreferrer"
-                                        className="shrink-0 text-xs font-semibold text-green-dark hover:underline"
-                                        title="Open bij Apex Power Supplies (winkelwagen)"
-                                      >
-                                        Apex → winkelwagen
-                                      </a>
-                                    ) : null}
-                                  </div>
-                                  </div>
-                                </div>
-                                <p
-                                  className={[
-                                    "text-right tabular-nums text-sm",
-                                    cancelled
-                                      ? "text-muted line-through"
-                                      : "text-ink",
-                                  ].join(" ")}
-                                >
-                                  {item.aantal}×
-                                </p>
-                                <p
-                                  className={[
-                                    "text-right tabular-nums text-sm",
-                                    cancelled
-                                      ? "text-muted line-through"
-                                      : "text-ink",
-                                  ].join(" ")}
-                                >
-                                  {formatEuro(item.inkoop_ex_btw)}
-                                </p>
-                                <div className="flex justify-end">
-                                  {cancelled ? (
-                                    <span className="px-2 py-1 text-[10px] font-semibold uppercase tracking-wide text-muted">
-                                      Vervallen
-                                    </span>
-                                  ) : (
-                                    <select
-                                      value={item.status}
-                                      disabled={
-                                        busyKey === `${order.id}:${item.key}`
-                                      }
-                                      onChange={(e) =>
-                                        void setLineStatus(
-                                          order,
-                                          item.key,
-                                          e.target.value as InkoopRegelStatus
-                                        )
-                                      }
-                                      className="border border-line bg-white px-2 py-1 text-xs font-semibold text-ink outline-none focus:border-green"
-                                    >
-                                      <option value="te_kopen">
-                                        Te bestellen
-                                      </option>
-                                      <option value="besteld">Besteld</option>
-                                      <option value="geleverd">
-                                        Geleverd
-                                      </option>
-                                    </select>
-                                  )}
-                                </div>
-                              </li>
-                              );
-                            })}
-                          </ul>
-                        </div>
-                      </div>
-                    ) : null}
-                  </li>
-                );
-              })}
-            </ul>
-          </div>
-        </div>
-      )}
+                                <NativeSelectOption value="te_kopen">
+                                  Te bestellen
+                                </NativeSelectOption>
+                                <NativeSelectOption value="besteld">
+                                  Besteld
+                                </NativeSelectOption>
+                                <NativeSelectOption value="geleverd">
+                                  Geleverd
+                                </NativeSelectOption>
+                              </NativeSelect>
+                            )}
+                          </TableCell>
+                        </TableRow>
+                      );
+                    })}
+                  </TableBody>
+                </Table>
+              </div>
+              <SheetFooter>
+                {isOpenInkoop(openOrder) ? (
+                  <Button
+                    type="button"
+                    onClick={() => openWinkel(openOrder.id)}
+                  >
+                    <ShoppingCart />
+                    Bestellen in winkel
+                  </Button>
+                ) : null}
+                {openOrder.inkoop_leverancier_status === "op_krediet" ? (
+                  <Button
+                    type="button"
+                    variant="outline"
+                    disabled={busyKey === `${openOrder.id}:lev`}
+                    onClick={() =>
+                      void setLeverancierBetaling(openOrder, "betaald")
+                    }
+                  >
+                    Markeer als betaald
+                  </Button>
+                ) : null}
+                {openOrder.summary.overall === "besteld" ||
+                openOrder.summary.overall === "deels" ? (
+                  <Button
+                    type="button"
+                    variant="outline"
+                    disabled={busyKey === `${openOrder.id}:all`}
+                    onClick={() => void markAll(openOrder, "geleverd")}
+                  >
+                    Alles geleverd
+                  </Button>
+                ) : null}
+              </SheetFooter>
+            </>
+          ) : null}
+        </SheetContent>
+      </Sheet>
     </div>
   );
 }

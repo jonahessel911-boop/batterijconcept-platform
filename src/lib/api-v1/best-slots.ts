@@ -299,6 +299,7 @@ type AdviseurRow = {
   factuur_plaats?: string | null;
   rol?: string | null;
   bel_planning?: boolean | null;
+  geblokkeerd?: boolean | null;
 };
 
 /** Vertrekpunt voor reistijd: startadres, anders factuuradres. */
@@ -508,9 +509,8 @@ export async function loadBestSlotsForLead(
   const { data: adviseursRaw, error: advErr } = await sb
     .from("adviseurs")
     .select(
-      "id, naam, email, actief, start_adres, start_vanaf_huis_maandag, startdatum, factuur_adres, factuur_postcode, factuur_plaats, rol"
+      "id, naam, email, actief, geblokkeerd, bel_planning, start_adres, start_vanaf_huis_maandag, startdatum, factuur_adres, factuur_postcode, factuur_plaats, rol"
     )
-    .eq("actief", true)
     .order("naam");
 
   let adviseursList = (adviseursRaw || []) as AdviseurRow[];

@@ -364,25 +364,39 @@ export async function buildSalesRapportage(
   endYmd: string,
   now = new Date()
 ): Promise<SalesRapportage> {
-  const { data: adviseursRaw, error: advErr } = await sb
+  let { data: adviseursRaw, error: advErr } = await sb
     .from("adviseurs")
-    .select("id, naam, actief, rol, startdatum")
+    .select("id, naam, actief, geblokkeerd, rol, startdatum")
     .order("naam");
+  if (advErr?.message?.includes("geblokkeerd")) {
+    const retry = await sb
+      .from("adviseurs")
+      .select("id, naam, actief, rol, startdatum")
+      .order("naam");
+    adviseursRaw = retry.data;
+    advErr = retry.error;
+  }
   if (advErr) throw advErr;
 
   type AdvRow = {
     id: string;
     naam: string;
     actief?: boolean | null;
+    geblokkeerd?: boolean | null;
     rol?: string | null;
     startdatum?: string | null;
   };
   const allAdviseurs = (adviseursRaw || []) as AdvRow[];
   /** Namen voor alle adviseurs (ook inactief) — sales blijven zichtbaar */
   const advById = new Map(allAdviseurs.map((a) => [a.id, a.naam]));
-  /** Alleen actieve planbare adviseurs voor afspraak-keten */
+  /** Alleen actieve, niet-geblokkeerde planbare adviseurs voor afspraak-keten */
   const planbaarIds = allAdviseurs
-    .filter((a) => a.actief !== false && isPlanbaarAdviseur(a))
+    .filter(
+      (a) =>
+        a.actief !== false &&
+        a.geblokkeerd !== true &&
+        isPlanbaarAdviseur(a)
+    )
     .map((a) => a.id);
   const ids = planbaarIds;
 

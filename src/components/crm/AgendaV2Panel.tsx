@@ -216,6 +216,11 @@ function stickerMeta(
     statusColor = "#B91C1C";
     tint = "#FEF2F2";
     border = "#FECACA";
+  } else if (a.niet_gelopen_door_adviseur === true) {
+    statusLabel = "Niet gelopen";
+    statusColor = "#C62828";
+    tint = "#FFEBEE";
+    border = "#EF9A9A";
   } else if (a.status === "voltooid" || leadStatus) {
     const ls = leadStatus || "";
     if (ls === "sale_financiering" || ls === "sale_eigen_middelen") {
@@ -480,6 +485,9 @@ export function AgendaPanel({
   const [isNarrow, setIsNarrow] = useState(false);
   const [mobileAdviseurId, setMobileAdviseurId] = useState<string | null>(null);
   const [hiddenIds, setHiddenIds] = useState<Set<string>>(new Set());
+  const [nietGelopenCounts, setNietGelopenCounts] = useState<
+    Record<string, number>
+  >({});
   const [adviseurMenuOpen, setAdviseurMenuOpen] = useState(false);
   const [beschikbaarMap, setBeschikbaarMap] = useState<Map<string, boolean>>(
     new Map()
@@ -840,7 +848,9 @@ export function AgendaPanel({
     try {
       const [a, adv] = await Promise.all([
         fetch("/api/afspraken", { cache: "no-store" }).then((r) => r.json()),
-        fetch("/api/adviseurs", { cache: "no-store" }).then((r) => r.json()),
+        fetch("/api/adviseurs?include_inactive=1", { cache: "no-store" }).then(
+          (r) => r.json()
+        ),
       ]);
       if (!a.error) {
         const list = (a.afspraken || []) as Afspraak[];
@@ -851,6 +861,18 @@ export function AgendaPanel({
         );
       } else if (!afsprakenProp?.length) throw new Error(a.error);
       if (!adv.error) setAdviseurs(adv.adviseurs || []);
+      const ids = ((adv.adviseurs || []) as Adviseur[])
+        .map((x) => x.id)
+        .filter(Boolean);
+      if (ids.length) {
+        const ng = await fetch(
+          `/api/afspraken/niet-gelopen-adviseur?adviseur_ids=${encodeURIComponent(ids.join(","))}`,
+          { cache: "no-store" }
+        ).then((r) => r.json().catch(() => ({})));
+        if (ng && typeof ng.counts === "object" && ng.counts) {
+          setNietGelopenCounts(ng.counts as Record<string, number>);
+        }
+      }
     } catch (e) {
       setError(e instanceof Error ? e.message : "Laden mislukt");
     } finally {
@@ -1581,7 +1603,14 @@ export function AgendaPanel({
                               });
                             }}
                           />
-                          <span className="min-w-0 flex-1 truncate">{a.naam}</span>
+                          <span className="min-w-0 flex-1 truncate">
+                            {a.naam}
+                            {a.geblokkeerd === true
+                              ? " (geblokkeerd)"
+                              : a.actief === false
+                                ? " (inactief)"
+                                : ""}
+                          </span>
                           <span className="shrink-0 tabular-nums text-[10px] text-muted">
                             {gepland}/{totaal}
                           </span>
@@ -1727,10 +1756,26 @@ export function AgendaPanel({
                               ({cr}% cr)
                             </span>
                           ) : null}
+                          {a.geblokkeerd === true ? (
+                            <span className="font-medium text-[#C62828]">
+                              {" "}
+                              (geblokkeerd)
+                            </span>
+                          ) : a.actief === false ? (
+                            <span className="font-medium text-muted">
+                              {" "}
+                              (inactief)
+                            </span>
+                          ) : null}
                         </p>
                         <p className="mt-0.5 text-[10px] font-medium tabular-nums text-muted">
                           {gepland}/{totaal}
                         </p>
+                        {(nietGelopenCounts[a.id] || 0) > 0 ? (
+                          <p className="mt-0.5 text-[9px] font-semibold text-[#C62828]">
+                            Niet gelopen {nietGelopenCounts[a.id]}
+                          </p>
+                        ) : null}
                         {isWeekBlocked(a.id) && (
                           <p className="mt-0.5 text-[9px] font-semibold text-[#B91C1C]">
                             Blok
@@ -2107,8 +2152,15 @@ export function AgendaPanel({
           }
           onClose={() => setSelected(null)}
           onUpdated={(a) => {
+            const was = selected?.niet_gelopen_door_adviseur === true;
             setAfspraken((prev) => prev.map((x) => (x.id === a.id ? a : x)));
             setSelected(a);
+            if (a.niet_gelopen_door_adviseur === true && !was) {
+              setNietGelopenCounts((prev) => ({
+                ...prev,
+                [a.adviseur_id]: (prev[a.adviseur_id] || 0) + 1,
+              }));
+            }
             const st = a.leads?.status;
             if (st && a.lead_id && onStatusChange) {
               onStatusChange(a.lead_id, st as LeadStatus);

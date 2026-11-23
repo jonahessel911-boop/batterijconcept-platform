@@ -109,9 +109,8 @@ export async function GET(req: NextRequest) {
     let { data: adviseursRaw, error: advErr } = await sb
       .from("adviseurs")
       .select(
-        "id, naam, email, rol, actief, startdatum, start_vanaf_huis_maandag"
+        "id, naam, email, rol, actief, geblokkeerd, bel_planning, startdatum, start_vanaf_huis_maandag"
       )
-      .eq("actief", true)
       .order("naam");
     if (
       advErr &&
@@ -121,7 +120,6 @@ export async function GET(req: NextRequest) {
       const fb = await sb
         .from("adviseurs")
         .select("id, naam, email, rol, actief, startdatum")
-        .eq("actief", true)
         .order("naam");
       adviseursRaw = (fb.data || []).map((a) => ({
         ...a,
@@ -137,6 +135,8 @@ export async function GET(req: NextRequest) {
         email: a.email,
         actief: a.actief,
         rol: a.rol,
+        bel_planning: (a as { bel_planning?: boolean | null }).bel_planning,
+        geblokkeerd: (a as { geblokkeerd?: boolean | null }).geblokkeerd,
       })
     );
     if (lockAdviseurId) {

@@ -36,7 +36,7 @@ import {
 } from "@/lib/format";
 import { StatusBadge } from "./StatusBadge";
 import { isAdminAdviseur } from "@/lib/admin-adviseur";
-import { isAgendaAdviseur } from "@/lib/rollen";
+import { isAgendaAdviseur, magNietGelopenAdviseur } from "@/lib/rollen";
 import {
   afspraakBlokkeertAgenda,
   afspraakSoortLabel,
@@ -671,6 +671,7 @@ export function AfspraakDetail({
   const [sessionAdviseurId, setSessionAdviseurId] = useState<string | null>(
     null
   );
+  const [sessionRol, setSessionRol] = useState<string | null>(null);
   const [boValues, setBoValues] = useState<BackofficeActieFormValues>({
     aanbetalingModus: "restant",
     aanbetalingHandmatig: "",
@@ -889,6 +890,9 @@ export function AfspraakDetail({
           }
           if (data.adviseur?.id) {
             setSessionAdviseurId(data.adviseur.id as string);
+          }
+          if (data.adviseur?.rol) {
+            setSessionRol(String(data.adviseur.rol));
           }
         }
       } catch {
@@ -1793,6 +1797,45 @@ export function AfspraakDetail({
     }
   }
 
+  const magNietGelopen = magNietGelopenAdviseur(sessionRol);
+  const alNietGelopen = current.niet_gelopen_door_adviseur === true;
+
+  async function markNietGelopenDoorAdviseur() {
+    if (cancelled || alNietGelopen) return;
+    const ok = window.confirm(
+      "Deze afspraak markeren als niet gelopen door de adviseur?\n\nDit telt voor boeteclausule 3.3 (€100) en wordt opgeslagen."
+    );
+    if (!ok) return;
+    setBusy(true);
+    setError(null);
+    try {
+      const res = await fetch("/api/afspraken/niet-gelopen-adviseur", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ afspraak_id: current.id }),
+      });
+      const data = (await res.json().catch(() => ({}))) as {
+        error?: string;
+        afspraak?: Afspraak;
+      };
+      if (!res.ok) throw new Error(data.error || "Markeren mislukt");
+      const next = data.afspraak
+        ? { ...current, ...data.afspraak }
+        : {
+            ...current,
+            status: "voltooid" as const,
+            niet_gelopen_door_adviseur: true,
+          };
+      setCurrent(next);
+      onUpdated(next);
+      setOkMsg("Gemarkeerd als niet gelopen door adviseur.");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Fout");
+    } finally {
+      setBusy(false);
+    }
+  }
+
   return (
     <div
       role="dialog"
@@ -1846,7 +1889,41 @@ export function AfspraakDetail({
                 Mail verstuurd
               </span>
             )}
+            {alNietGelopen ? (
+              <span className="inline-flex items-center rounded-full bg-[#FDECEA] px-2.5 py-0.5 text-[11px] font-semibold text-[#C62828]">
+                Niet gelopen door adviseur
+              </span>
+            ) : null}
           </div>
+
+          {magNietGelopen && mode === "view" && !cancelled ? (
+            <section className="rounded-2xl border border-[#C62828]/30 bg-[#FFF8F6] p-5">
+              <p className="text-[10px] font-semibold uppercase tracking-[0.08em] text-[#C62828]">
+                Backoffice
+              </p>
+              {alNietGelopen ? (
+                <p className="mt-1 text-sm text-muted">
+                  Deze afspraak telt als niet gelopen door de adviseur
+                  (clausule 3.3).
+                </p>
+              ) : (
+                <>
+                  <p className="mt-1 text-sm text-muted">
+                    Alleen als de adviseur aantoonbaar nalatig was (niet
+                    verschenen / afspraak niet gecontroleerd).
+                  </p>
+                  <button
+                    type="button"
+                    disabled={busy}
+                    onClick={() => void markNietGelopenDoorAdviseur()}
+                    className="mt-4 min-h-11 w-full border border-[#C62828] bg-white px-4 py-2.5 text-sm font-semibold text-[#C62828] hover:bg-[#FDECEA] disabled:opacity-60"
+                  >
+                    Niet gelopen door adviseur
+                  </button>
+                </>
+              )}
+            </section>
+          ) : null}
 
           {isWarmtefondsAfspraak && mode === "view" && (
             <section className="rounded-2xl border border-[#1A4A6E]/30 bg-[#E8F0F6] p-5 shadow-[0_1px_2px_rgba(26,74,110,0.06)]">

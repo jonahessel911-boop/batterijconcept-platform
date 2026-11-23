@@ -34,6 +34,7 @@ export const VERVOLG_PUNT_VRIJGESTELD = new Set<LeadStatus>([
   "geen_interesse_al_batterij",
   "geen_interesse_plugin",
   "geen_interesse_alleen_info",
+  "geen_interesse_vertrouwt_niet",
   "niet_gekwalificeerd",
   "deur_niet_open",
   "afspraak_afgezegd_klant",

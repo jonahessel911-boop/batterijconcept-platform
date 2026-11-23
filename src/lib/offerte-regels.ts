@@ -41,13 +41,31 @@ export function extraKortingOmschrijving(productNaam: string): string {
   return `Korting ${productNaam}`;
 }
 
-/** Zichtbare kortingsregel (niet verborgen in productprijzen). */
+/** Intern bewaarde korting — niet op de klantofferte, wél intern en op de factuur. */
+export const INTERN_KORTING_OMSCHRIJVING = "Korting intern";
+
+function kortingOmschrijvingNorm(r: { omschrijving?: string | null }): string {
+  return normalizeOmschrijving(r.omschrijving || "").trim();
+}
+
+/** Zichtbare of interne kortingsregel. */
 export function isKortingRegel(r: {
   omschrijving: string;
   prijs_ex_btw?: number | null;
 }): boolean {
-  const o = normalizeOmschrijving(r.omschrijving || "").trim();
+  const o = kortingOmschrijvingNorm(r);
   return o === "korting" || o.startsWith("korting ");
+}
+
+export function isInternKortingRegel(r: {
+  omschrijving?: string | null;
+}): boolean {
+  const o = kortingOmschrijvingNorm(r);
+  return o === "korting intern" || o.startsWith("korting intern ");
+}
+
+function round2(n: number): number {
+  return Math.round(n * 100) / 100;
 }
 
 /** Korting incl. btw (negatief bedrag, of 0). */
@@ -68,15 +86,118 @@ export function kortingIncVanRegels(
     const pct = Number(r.btw_percentage ?? 21) || 21;
     inc += lineEx * (1 + pct / 100);
   }
-  const rounded = Math.round(inc * 100) / 100;
+  const rounded = round2(inc);
   return rounded < 0 ? rounded : 0;
 }
 
-/** Korting op de klantofferte: geen meterkast/noodstroom-korting. */
+export function kortingExVanRegels(
+  regels: Parameters<typeof kortingIncVanRegels>[0]
+): number {
+  let ex = 0;
+  for (const r of regels) {
+    if (!isKortingRegel(r)) continue;
+    ex +=
+      Number(r.totaal_ex_btw ?? Number(r.aantal) * Number(r.prijs_ex_btw)) || 0;
+  }
+  const rounded = round2(ex);
+  return rounded < 0 ? rounded : 0;
+}
+
+export function zichtbareKortingExVanRegels(
+  regels: Parameters<typeof kortingIncVanRegels>[0]
+): number {
+  return kortingExVanRegels(regels.filter((r) => !isInternKortingRegel(r)));
+}
+
+export function internKortingExVanRegels(
+  regels: Parameters<typeof kortingIncVanRegels>[0]
+): number {
+  return kortingExVanRegels(regels.filter((r) => isInternKortingRegel(r)));
+}
+
+/** Korting op de klantofferte: intern bewaarde korting telt niet mee. */
 export function zichtbareKortingIncVanRegels(
   regels: Parameters<typeof kortingIncVanRegels>[0]
 ): number {
-  return kortingIncVanRegels(regels.filter((r) => !isVerborgenOfferteRegel(r)));
+  return kortingIncVanRegels(
+    regels.filter((r) => !isVerborgenOfferteRegel(r) && !isInternKortingRegel(r))
+  );
+}
+
+export type OffertePrijsSpecificatie = {
+  brutoEx: number;
+  kortingEx: number;
+  zichtbareKortingEx: number;
+  internKortingEx: number;
+  netEx: number;
+  btw: number;
+  totaalInc: number;
+  heeftKorting: boolean;
+  toonKortingOpKlantOfferte: boolean;
+};
+
+/** Origineel subtotaal, korting en net — intern altijd, op klantofferte alleen als gekozen. */
+export function offertePrijsSpecificatie(
+  offerte: {
+    subtotaal_ex_btw: number;
+    btw_bedrag: number;
+    totaal_inc_btw: number;
+  },
+  regels: Parameters<typeof kortingIncVanRegels>[0]
+): OffertePrijsSpecificatie {
+  const internKortingEx = internKortingExVanRegels(regels);
+  const zichtbareKortingEx = zichtbareKortingExVanRegels(regels);
+  const kortingEx = round2(internKortingEx + zichtbareKortingEx);
+  const netEx = round2(Number(offerte.subtotaal_ex_btw) || 0);
+  const brutoEx = round2(netEx - kortingEx);
+  return {
+    brutoEx,
+    kortingEx,
+    zichtbareKortingEx,
+    internKortingEx,
+    netEx,
+    btw: round2(Number(offerte.btw_bedrag) || 0),
+    totaalInc: round2(Number(offerte.totaal_inc_btw) || 0),
+    heeftKorting: kortingEx < 0,
+    toonKortingOpKlantOfferte: zichtbareKortingEx < 0,
+  };
+}
+
+/**
+ * Factuur toont korting als dit (deel)bedrag de hele order-excl. is.
+ * Deelbetalingen (aanbetaling) krijgen geen 8500/−1000-breakdown.
+ */
+export function factuurKortingSpecificatie(opts: {
+  bedragEx: number;
+  offerteNetEx?: number | null;
+  kortingEx: number;
+}): { brutoEx: number; kortingEx: number; netEx: number } | null {
+  const kortingAbs = Math.abs(round2(opts.kortingEx));
+  if (kortingAbs < 0.005) return null;
+  const netEx = round2(opts.bedragEx);
+  const offerteNet = round2(Number(opts.offerteNetEx) || 0);
+  if (offerteNet > 0 && Math.abs(Math.abs(netEx) - offerteNet) > 0.05) {
+    return null;
+  }
+  const sign = netEx < 0 ? -1 : 1;
+  const kortingEx = round2(sign * -kortingAbs);
+  return {
+    brutoEx: round2(netEx - kortingEx),
+    kortingEx,
+    netEx,
+  };
+}
+
+export async function loadOfferteKortingEx(
+  sb: { from: (table: string) => any },
+  offerteId: string | null | undefined
+): Promise<number> {
+  if (!offerteId) return 0;
+  const { data } = await sb
+    .from("offerte_regels")
+    .select("omschrijving, aantal, prijs_ex_btw, totaal_ex_btw")
+    .eq("offerte_id", offerteId);
+  return kortingExVanRegels(data || []);
 }
 
 type RegelBedrag = {

@@ -40,6 +40,9 @@ export type MontageAccessoire = "baseplate" | "wallbracket";
 
 export const SCHOUW_MONTAGE_CHECK_KEY = "__schouw_montage";
 export const INKOOP_EXTRA_NOTITIES_KEY = "__inkoop_extra_notities";
+export const INKOOP_BESTEL_BEVESTIGING_KEY = "__inkoop_bestel_bevestiging";
+export const INKOOP_BESTEL_BEVESTIGING_TEKST =
+  "Ik heb goed doorgenomen wat ik moet kopen, heb het schouwrapport bekeken en heb deze correct doorgenomen in de inkoop.";
 export const INKOOP_NOTE_PREFIX = "__note:";
 export const SERVICE_INKOOP_META_KEY = "__service_inkoop";
 export const SERVICE_INKOOP_KEY_PREFIX = "svc:";

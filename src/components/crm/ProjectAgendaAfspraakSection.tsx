@@ -49,7 +49,7 @@ function mailSummary(mails: {
   const warns: string[] = [];
   if (mails.klant?.ok)
     parts.push(
-      mails.klant.wijziging ? "klant (wijziging schouwafspraak)" : "klant"
+      mails.klant.wijziging ? "klant (wijziging afspraak)" : "klant"
     );
   else if (mails.klant?.skipped)
     warns.push(mails.klant.error || "geen klantmail");
@@ -365,6 +365,7 @@ export function ProjectAgendaAfspraakSection({
           installatie_at: parsed.toISOString(),
           installatie_partner_id: partnerId,
           installatie_notities: notities.trim() || null,
+          installatie_koppel_id: project.installatie_koppel_id || undefined,
         }),
       });
       const data = await res.json().catch(() => ({}));
@@ -376,7 +377,14 @@ export function ProjectAgendaAfspraakSection({
       const summary = mailSummary(
         (data as { mails?: Parameters<typeof mailSummary>[0] }).mails || {}
       );
-      setOkMsg(`Installatie ingepland. ${summary.ok}`);
+      setOkMsg(
+        `${
+          (data as { mails?: { klant?: { wijziging?: boolean } } }).mails?.klant
+            ?.wijziging
+            ? "Installatie gewijzigd"
+            : "Installatie ingepland"
+        }. ${summary.ok}`
+      );
       if (summary.warn) setError(summary.warn);
       setOpen(false);
       setNotities("");
@@ -435,7 +443,9 @@ export function ProjectAgendaAfspraakSection({
           <p className="text-xs text-muted">
             {soort === "schouwdag" && isSchouwdagDefinitief(project)
               ? "Pas datum en tijd van de schouw aan. De klant krijgt een mail ‘Wijziging schouwafspraak’."
-              : "Plan een schouw of installatie. Klant en installateur krijgen een bevestigingsmail."}
+              : soort === "installatie" && project.installatie_at
+                ? "Pas datum en tijd van de installatie aan. De klant krijgt een mail ‘Wijziging installatieafspraak’."
+                : "Plan een schouw of installatie. Klant en installateur krijgen een bevestigingsmail."}
           </p>
 
           <label className="block text-[10px] font-semibold uppercase text-muted">
@@ -611,7 +621,9 @@ export function ProjectAgendaAfspraakSection({
                       : "Schouwdag inplannen"
                     : soort === "service"
                       ? "Service inplannen"
-                      : "Installatie inplannen"}
+                      : project.installatie_at
+                        ? "Installatie wijzigen en klant mailen"
+                        : "Installatie inplannen"}
             </button>
           </div>
         </form>
@@ -658,11 +670,18 @@ export function ProjectAgendaAfspraakSection({
                     )}
                   </td>
                   <td className="px-3 py-3 align-top text-right">
-                    {r.key === "schouwdag" ? (
+                    {r.key === "schouwdag" || r.key === "installatie" ? (
                       <button
                         type="button"
                         onClick={() => {
-                          setSoort("schouwdag");
+                          if (r.key === "installatie") {
+                            setSoort("installatie");
+                            setInstallatieAtIso(project.installatie_at || null);
+                            setNotities(project.installatie_notities || "");
+                          } else {
+                            setSoort("schouwdag");
+                            setNotities(project.schouw_notities || "");
+                          }
                           setOpen(true);
                           setError(null);
                           setOkMsg(null);

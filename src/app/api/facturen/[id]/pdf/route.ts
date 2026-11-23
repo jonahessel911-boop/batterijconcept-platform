@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { cookies } from "next/headers";
 import { getSupabaseAdmin } from "@/lib/supabase";
 import { buildFactuurPdf } from "@/lib/pdf-factuur";
+import { loadOfferteKortingEx } from "@/lib/offerte-regels";
 import { sendEmail } from "@/lib/email/postmark";
 import { factuurWarmtefondsAanbetalingHerinneringEmail } from "@/lib/email/templates";
 import { verstuurFactuurNaarKlant } from "@/lib/factuur-versturen";
@@ -59,7 +60,8 @@ async function loadFactuur(id: string) {
     offerte = o;
   }
 
-  return { ...data, offertes: offerte };
+  const kortingEx = await loadOfferteKortingEx(sb, data.offerte_id);
+  return { ...data, offertes: offerte, kortingEx };
 }
 
 /** GET /api/facturen/[id]/pdf — download PDF (ook concept). ?inline=1 = in browser tonen. */
@@ -100,6 +102,7 @@ export async function GET(
       lead: factuur.leads,
       offerte,
       creditVanNummer,
+      kortingEx: factuur.kortingEx,
     });
     const bytes = Buffer.from(await blob.arrayBuffer());
     const filename = `${isCredit ? "credit-" : ""}${factuur.factuur_nummer}${
@@ -220,6 +223,7 @@ async function sendWarmtefondsAanbetalingHerinnering(
     factuur,
     lead: factuur.leads,
     offerte,
+    kortingEx: factuur.kortingEx,
   });
   const pdfBytes = Buffer.from(await blob.arrayBuffer());
   const filename = `${factuur.factuur_nummer}.pdf`;

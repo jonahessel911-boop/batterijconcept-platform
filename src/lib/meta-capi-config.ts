@@ -24,6 +24,7 @@ export const META_CAPI_NOT_QUALIFIED: ReadonlySet<LeadStatus> = new Set([
   "geen_interesse_al_batterij",
   "geen_interesse_plugin",
   "geen_interesse_alleen_info",
+  "geen_interesse_vertrouwt_niet",
   "geen_contact",
   "definitief_geen_contact",
   "huurwoning",
@@ -53,6 +54,7 @@ export const META_CAPI_STATUS_LEVEL: Partial<Record<LeadStatus, 0 | 1 | 2 | 3>> 
     geen_interesse_al_batterij: 0,
     geen_interesse_plugin: 0,
     geen_interesse_alleen_info: 0,
+    geen_interesse_vertrouwt_niet: 0,
     niet_gekwalificeerd: 0,
 
     // Fysieke afspraak geboekt → QualifiedLead + Schedule

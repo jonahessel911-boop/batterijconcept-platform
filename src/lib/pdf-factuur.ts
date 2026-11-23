@@ -20,6 +20,7 @@ import {
   stripFactuurRegelsBlock,
   type FactuurPdfRegel,
 } from "@/lib/factuur-regels";
+import { factuurKortingSpecificatie } from "@/lib/offerte-regels";
 
 export type { FactuurPdfRegel } from "@/lib/factuur-regels";
 export {
@@ -100,6 +101,8 @@ type PdfInput = {
   > | null;
   /** Factuurnummer van de oorspronkelijke factuur (bij credit). */
   creditVanNummer?: string | null;
+  /** Korting excl. btw van de offerte (negatief). Op de factuur als de bedragen matchen. */
+  kortingEx?: number | null;
 };
 
 const { green: GREEN, dark: DARK, orange: ORANGE, charcoal: CHARCOAL, muted: MUTED, line: LINE, grayRow: GRAY } =
@@ -405,17 +408,50 @@ export async function buildFactuurPdf(input: PdfInput): Promise<Blob> {
     }
   }
 
-  // Excl
-  doc.setFillColor(...GRAY);
-  doc.rect(totalsX, y, totalsW, 7, "F");
+  const kortingBlok = factuurKortingSpecificatie({
+    bedragEx,
+    offerteNetEx: offerte ? Number(offerte.subtotaal_ex_btw) : null,
+    kortingEx: Number(input.kortingEx) || 0,
+  });
+
   doc.setFont("helvetica", "normal");
   doc.setFontSize(8);
   doc.setTextColor(...CHARCOAL);
-  doc.text("Excl. btw", totalsX + 2, y + 4.8);
-  doc.text(formatEuroPdf(bedragEx), totalsX + totalsW - 2, y + 4.8, {
-    align: "right",
-  });
-  y += 7;
+
+  if (kortingBlok) {
+    doc.setFillColor(...GRAY);
+    doc.rect(totalsX, y, totalsW, 7, "F");
+    doc.text("Subtotaal excl. btw", totalsX + 2, y + 4.8);
+    doc.text(formatEuroPdf(kortingBlok.brutoEx), totalsX + totalsW - 2, y + 4.8, {
+      align: "right",
+    });
+    y += 7;
+    doc.setFillColor(...GRAY);
+    doc.rect(totalsX, y, totalsW, 7, "F");
+    doc.text("Korting", totalsX + 2, y + 4.8);
+    doc.text(
+      formatEuroPdf(kortingBlok.kortingEx),
+      totalsX + totalsW - 2,
+      y + 4.8,
+      { align: "right" }
+    );
+    y += 7;
+    doc.setFillColor(...GRAY);
+    doc.rect(totalsX, y, totalsW, 7, "F");
+    doc.text("Totaal excl. btw", totalsX + 2, y + 4.8);
+    doc.text(formatEuroPdf(kortingBlok.netEx), totalsX + totalsW - 2, y + 4.8, {
+      align: "right",
+    });
+    y += 7;
+  } else {
+    doc.setFillColor(...GRAY);
+    doc.rect(totalsX, y, totalsW, 7, "F");
+    doc.text("Excl. btw", totalsX + 2, y + 4.8);
+    doc.text(formatEuroPdf(bedragEx), totalsX + totalsW - 2, y + 4.8, {
+      align: "right",
+    });
+    y += 7;
+  }
 
   // BTW
   doc.setFillColor(...GRAY);

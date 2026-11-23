@@ -17,8 +17,9 @@ import {
   formatEuro,
 } from "@/lib/format";
 import {
+  isInternKortingRegel,
   isKortingRegel,
-  kortingIncVanRegels,
+  offertePrijsSpecificatie,
 } from "@/lib/offerte-regels";
 import {
   aanbetalingVanOrder,
@@ -681,8 +682,9 @@ export function OffertePage() {
         subtitle={`${regels.filter((r) => !isKortingRegel(r)).length} producten`}
       >
         {(() => {
+          const spec = offertePrijsSpecificatie(offerte, regels);
           const productRegels = regels.filter((r) => !isKortingRegel(r));
-          const kortingInc = kortingIncVanRegels(regels);
+          const kortingRegels = regels.filter((r) => isKortingRegel(r));
           return (
             <>
         {productRegels.length === 0 ? (
@@ -712,6 +714,20 @@ export function OffertePage() {
                   </td>
                 </tr>
               ))}
+              {kortingRegels.map((r) => (
+                <tr key={r.id}>
+                  <td>
+                    {isInternKortingRegel(r)
+                      ? "Korting (niet op klantofferte)"
+                      : r.omschrijving}
+                  </td>
+                  <td>{r.aantal}</td>
+                  <td>{formatEuro(r.prijs_ex_btw)}</td>
+                  <td className="font-medium text-green-deeper">
+                    {formatEuro(r.totaal_ex_btw ?? r.aantal * r.prijs_ex_btw)}
+                  </td>
+                </tr>
+              ))}
             </tbody>
           </table>
         )}
@@ -719,27 +735,38 @@ export function OffertePage() {
           <p className="text-muted">
             Subtotaal excl. btw{" "}
             <span className="ml-4 inline-block w-28 text-ink">
-              {formatEuro(offerte.subtotaal_ex_btw)}
+              {formatEuro(spec.brutoEx)}
             </span>
           </p>
+          {spec.heeftKorting ? (
+            <>
+              <p className="font-semibold text-green-deeper">
+                Korting
+                {spec.internKortingEx < 0 && spec.zichtbareKortingEx >= 0
+                  ? " (intern)"
+                  : ""}{" "}
+                <span className="ml-4 inline-block w-28">
+                  {formatEuro(spec.kortingEx)}
+                </span>
+              </p>
+              <p className="text-muted">
+                Totaal excl. btw{" "}
+                <span className="ml-4 inline-block w-28 text-ink">
+                  {formatEuro(spec.netEx)}
+                </span>
+              </p>
+            </>
+          ) : null}
           <p className="text-muted">
             Btw{" "}
             <span className="ml-4 inline-block w-28 text-ink">
-              {formatEuro(offerte.btw_bedrag)}
+              {formatEuro(spec.btw)}
             </span>
           </p>
-          {kortingInc < 0 && (
-            <p className="font-semibold text-green-deeper">
-              Korting{" "}
-              <span className="ml-4 inline-block w-28">
-                {formatEuro(kortingInc)}
-              </span>
-            </p>
-          )}
           <p className="font-display text-lg font-semibold text-green-deeper">
             Totaal{" "}
             <span className="ml-4 inline-block w-28">
-              {formatEuro(offerte.totaal_inc_btw)}
+              {formatEuro(spec.totaalInc)}
             </span>
           </p>
         </div>

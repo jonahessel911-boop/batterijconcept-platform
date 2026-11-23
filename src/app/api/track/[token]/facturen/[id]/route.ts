@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { getSupabaseAdmin } from "@/lib/supabase";
 import { buildFactuurPdf } from "@/lib/pdf-factuur";
+import { loadOfferteKortingEx } from "@/lib/offerte-regels";
 import { errMessage } from "@/lib/errors";
 import { selectFactuurById } from "@/lib/factuur-query";
 
@@ -70,11 +71,13 @@ export async function GET(
       ? creditVanRaw[0]
       : creditVanRaw;
 
+    const kortingEx = await loadOfferteKortingEx(sb, factuur.offerte_id);
     const blob = await buildFactuurPdf({
       factuur,
       lead: factuur.leads,
       offerte: offerteJoin,
       creditVanNummer: creditVan?.factuur_nummer || null,
+      kortingEx,
     });
     const bytes = Buffer.from(await blob.arrayBuffer());
     const isCredit = Boolean(factuur.credit_van_factuur_id);

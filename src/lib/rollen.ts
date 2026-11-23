@@ -206,6 +206,12 @@ export function magInstellingen(rol: GebruikerRol): boolean {
   return rol === "admin";
 }
 
+/** Mag “niet gelopen door adviseur” markeren (boete 3.3) en offboarding-PDF. */
+export function magNietGelopenAdviseur(rol: GebruikerRol | string | null | undefined): boolean {
+  const r = normalizeRol(rol);
+  return r === "admin" || r === "backoffice";
+}
+
 /** Mag “Bekijk als”-filter gebruiken. */
 export function magBekijkAls(rol: GebruikerRol): boolean {
   return rol === "admin" || rol === "sales_manager";

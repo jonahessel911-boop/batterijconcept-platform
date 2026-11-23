@@ -1847,6 +1847,14 @@ export function BelPanel({
               <button
                 type="button"
                 disabled={busy}
+                onClick={() => void saveOutcome("geen_interesse_vertrouwt_niet")}
+                className="flex min-h-11 w-full items-center justify-center border border-line px-4 text-left text-sm font-semibold text-ink hover:bg-wash disabled:opacity-60"
+              >
+                Vertrouwt niet
+              </button>
+              <button
+                type="button"
+                disabled={busy}
                 onClick={() => void saveOutcome("geen_interesse")}
                 className="flex min-h-11 w-full items-center justify-center border border-line px-4 text-left text-sm font-semibold text-ink hover:bg-wash disabled:opacity-60"
               >

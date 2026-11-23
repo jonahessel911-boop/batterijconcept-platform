@@ -2398,6 +2398,27 @@ export function ProjectPage() {
     );
   })();
 
+  const installatieLeadEv = (() => {
+    if (!project.installatie_at) return null;
+    const matches = leadEvents.filter((ev) => {
+      if (ev.soort !== "installatie" && ev.soort !== "overig") return false;
+      if (
+        !/Installatie gepland|Installatieafspraak gewijzigd/i.test(
+          ev.titel || ""
+        )
+      ) {
+        return false;
+      }
+      const meta = (ev.meta || {}) as Record<string, unknown>;
+      if (meta.project_id && meta.project_id !== project.id) return false;
+      return true;
+    });
+    return (
+      matches.sort((a, b) => a.created_at.localeCompare(b.created_at))[0] ||
+      null
+    );
+  })();
+
   const schouwDagLeadEv = (() => {
     if (!project.schouw_at || !schouwDagDefinitief) return null;
     const matches = leadEvents.filter((ev) => {
@@ -2415,13 +2436,16 @@ export function ProjectPage() {
     );
   })();
 
-  if (project.schouw_jaar && project.schouw_week) {
+  // Nooit project.updated_at: die verspringt bij elke latere actie (installatie, notitie, …).
+  if (
+    project.schouw_jaar &&
+    project.schouw_week &&
+    !schouwDagDefinitief &&
+    (schouwWeekLeadEv?.created_at || project.schouw_at)
+  ) {
     feed.push({
       key: "schouw-week",
-      at:
-        schouwWeekLeadEv?.created_at ||
-        project.updated_at ||
-        project.created_at,
+      at: schouwWeekLeadEv?.created_at || (project.schouw_at as string),
       title: `Schouwweek gezet (W${project.schouw_week})`,
       body:
         formatProjectSchouwWeek(project) ||
@@ -2435,10 +2459,7 @@ export function ProjectPage() {
   if (project.schouw_at && schouwDagDefinitief) {
     feed.push({
       key: "schouw-datum",
-      at:
-        schouwDagLeadEv?.created_at ||
-        project.updated_at ||
-        project.created_at,
+      at: schouwDagLeadEv?.created_at || project.schouw_at,
       title: "Schouwdatum gepland",
       body:
         schouwDagLeadEv?.detail ||
@@ -2466,7 +2487,7 @@ export function ProjectPage() {
   if (project.installatie_at) {
     feed.push({
       key: "installatie",
-      at: project.updated_at || project.created_at,
+      at: installatieLeadEv?.created_at || project.installatie_at,
       title: "Installatie gepland",
       body: `Installatiedatum is gepland op ${formatDateTimeNl(project.installatie_at)}${
         (() => {
@@ -2656,8 +2677,14 @@ export function ProjectPage() {
       continue;
     }
 
-    // Schouwweek/schouwdag staan al op project — niet dubbel uit lead_events
+    // Schouwweek/schouwdag/installatie-gepland staan al als entity-rij — niet dubbel
     if (soort === "schouw" && /Schouwweek gezet/i.test(titel)) continue;
+    if (
+      (soort === "installatie" || soort === "overig") &&
+      /^Installatie gepland$/i.test(titel)
+    ) {
+      continue;
+    }
     if (
       soort === "schouw" &&
       /Schouwdag gepland|Schouwdatum gepland/i.test(titel) &&

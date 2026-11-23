@@ -198,8 +198,9 @@ export interface Adviseur {
    */
   startdatum?: string | null;
   /**
-   * Meedoen in bel-systeem / beste slots om agenda te vullen.
-   * false = niet automatisch inplannen (wel eigen agenda/beschikbaarheid).
+   * Actief in planning: meedoen in bel-systeem / beste slots.
+   * Los van `actief` (CRM-login) en `geblokkeerd`.
+   * false = niet in het bel-systeem (agenda blijft bestaan).
    */
   bel_planning?: boolean | null;
   /** CRM-rol */
@@ -362,6 +363,10 @@ export interface Afspraak {
   /** Adviseur meldde bij afboeken dat de partner er niet was. */
   partner_afwezig_gemeld_at?: string | null;
   partner_afwezig_gemeld_door?: string | null;
+  /** Boete 3.3: afspraak niet gelopen door nalatigheid adviseur. */
+  niet_gelopen_door_adviseur?: boolean | null;
+  niet_gelopen_door_adviseur_at?: string | null;
+  niet_gelopen_door_adviseur_door?: string | null;
   andere_offertes_gehad: boolean | null;
   manage_token: string | null;
   herinnering_verstuurd: boolean;

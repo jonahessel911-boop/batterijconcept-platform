@@ -608,6 +608,30 @@ export function statusNaSchouwInplannen(opts: {
 }
 
 /**
+ * Status na installatiedatum (her)zetten.
+ * Gaat nooit terug: voltooid / after sale / afgerond blijven staan.
+ */
+export function statusNaInstallatieInplannen(opts: {
+  currentStatus?: string | null;
+  betaalwijze?: string | null;
+}): ProjectStatusKey {
+  const current = toOperationalStatus(opts.currentStatus);
+  if (
+    current === "annulering" ||
+    current === "hold_sales_actie" ||
+    current === "service"
+  ) {
+    return current;
+  }
+  const bw = resolveBetaalwijze({ betaalwijze: opts.betaalwijze });
+  const pipeline = projectPipelineFor(bw);
+  const ci = pipeline.indexOf(current);
+  const ti = pipeline.indexOf("installatie_ingepland");
+  if (ci >= 0 && ti >= 0 && ci >= ti) return current;
+  return "installatie_ingepland";
+}
+
+/**
  * WF-goedkeuring (aanbod ondertekenen+): orderstatus → Schouw inplannen,
  * tenzij er al een exacte schouwdag is of de order verder is.
  */

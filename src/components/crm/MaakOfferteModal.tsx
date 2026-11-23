@@ -6,7 +6,9 @@ import { formatEuro } from "@/lib/format";
 import { getSupabaseBrowser, hasSupabaseConfig } from "@/lib/supabase";
 import {
   extraKortingOmschrijving,
+  INTERN_KORTING_OMSCHRIJVING,
   isAlphaEssMetOmvormerRegel,
+  isKortingRegel,
   isVerborgenOfferteRegel,
   omvormerOmschrijvingVoor,
 } from "@/lib/offerte-regels";
@@ -50,54 +52,6 @@ function linesTotaalEx(list: Line[]) {
 function toIncBtw(bedrag: number, btw: KortingBtw) {
   if (btw === "incl") return Math.round(bedrag * 100) / 100;
   return Math.round(bedrag * 1.21 * 100) / 100;
-}
-
-/** Verdeel korting (incl. btw) over betaalde regels zodat geen kortingsregel nodig is. */
-function applyHiddenKorting(lines: Line[], kortingInc: number): Line[] {
-  if (kortingInc <= 0) return lines.map((l) => ({ ...l }));
-
-  const schaalbaar = (l: Line) =>
-    l.prijs_ex_btw > 0 && !isVerborgenOfferteRegel(l);
-  const hasPaid = lines.some(schaalbaar);
-  if (!hasPaid) return lines.map((l) => ({ ...l }));
-
-  const paidInc = linesTotaalInc(lines.filter(schaalbaar));
-  if (paidInc <= 0) return lines.map((l) => ({ ...l }));
-
-  const targetInc =
-    Math.round((linesTotaalInc(lines) - kortingInc) * 100) / 100;
-  const scale = Math.max(0, (paidInc - kortingInc) / paidInc);
-
-  const scaled = lines.map((l) => {
-    if (!schaalbaar(l)) return { ...l };
-    return {
-      ...l,
-      prijs_ex_btw: Math.round(l.prijs_ex_btw * scale * 100) / 100,
-    };
-  });
-
-  // Afrondingsrest op grootste betaalde regel
-  const actual = linesTotaalInc(scaled);
-  const diff = Math.round((actual - targetInc) * 100) / 100;
-  if (Math.abs(diff) < 0.005) return scaled;
-
-  let best = -1;
-  let bestEx = -1;
-  for (let i = 0; i < scaled.length; i++) {
-    if (scaled[i].prijs_ex_btw > bestEx) {
-      bestEx = scaled[i].prijs_ex_btw;
-      best = i;
-    }
-  }
-  if (best < 0) return scaled;
-
-  const l = scaled[best];
-  const dEx = -diff / (l.aantal * (1 + l.btw_percentage / 100));
-  scaled[best] = {
-    ...l,
-    prijs_ex_btw: Math.round((l.prijs_ex_btw + dEx) * 100) / 100,
-  };
-  return scaled;
 }
 
 export function MaakOfferteModal({
@@ -224,22 +178,21 @@ export function MaakOfferteModal({
     let out: Line[];
 
     if (useKorting && kortingInc > 0) {
-      if (kortingZichtbaar === "zichtbaar") {
-        const ex = Math.round((kortingInc / 1.21) * 100) / 100;
-        out = [
-          ...withExtraKorting,
-          {
-            key: "korting",
-            product_id: null,
-            omschrijving: "Korting",
-            aantal: 1,
-            prijs_ex_btw: -ex,
-            btw_percentage: 21,
-          },
-        ];
-      } else {
-        out = applyHiddenKorting(withExtraKorting, kortingInc);
-      }
+      const ex = Math.round((kortingInc / 1.21) * 100) / 100;
+      out = [
+        ...withExtraKorting,
+        {
+          key: "korting",
+          product_id: null,
+          omschrijving:
+            kortingZichtbaar === "zichtbaar"
+              ? "Korting"
+              : INTERN_KORTING_OMSCHRIJVING,
+          aantal: 1,
+          prijs_ex_btw: -ex,
+          btw_percentage: 21,
+        },
+      ];
     } else {
       out = withExtraKorting;
     }
@@ -388,13 +341,8 @@ export function MaakOfferteModal({
         setError("De korting mag niet groter of gelijk zijn aan het totaal.");
         return;
       }
-      if (
-        kortingZichtbaar === "verborgen" &&
-        !lines.some((l) => l.prijs_ex_btw > 0)
-      ) {
-        setError(
-          "Verborgen korting vereist minstens één regel met een prijs."
-        );
+      if (!lines.some((l) => l.prijs_ex_btw > 0)) {
+        setError("Korting vereist minstens één regel met een prijs.");
         return;
       }
     }
@@ -801,8 +749,8 @@ export function MaakOfferteModal({
                             Alleen totaalprijs aanpassen
                           </span>
                           <span className="mt-0.5 block text-xs text-muted">
-                            Geen kortingsregel — productprijzen worden
-                            herberekend
+                            Niet op de klantofferte — intern en op de
+                            factuur wél zichtbaar
                           </span>
                         </span>
                       </label>
@@ -813,8 +761,8 @@ export function MaakOfferteModal({
                     <p className="text-xs text-muted">
                       Korting {formatEuro(kortingInc)} incl. btw
                       {kortingZichtbaar === "verborgen"
-                        ? " · verwerkt in de regelprijzen"
-                        : " · onder de prijs"}
+                        ? " · intern / op factuur, niet op klantofferte"
+                        : " · onder de prijs op de klantofferte"}
                     </p>
                   )}
                 </div>
@@ -838,58 +786,63 @@ export function MaakOfferteModal({
             </label>
 
             <div className="border-t border-line pt-3 text-right space-y-1">
-              {useKorting && kortingInc > 0 && (
-                <p className="text-sm text-muted">
-                  Was{" "}
-                  <span className="ml-2 inline-block min-w-[6rem] tabular-nums line-through">
-                    {formatEuro(basisTotaalInc)}
-                  </span>
-                </p>
-              )}
-              <p className="text-sm text-muted">
-                Subtotaal excl. btw{" "}
-                <span className="ml-2 inline-block min-w-[6rem] tabular-nums text-ink">
-                  {formatEuro(
-                    Math.round(
-                      previewLines.reduce(
-                        (s, l) => s + l.aantal * l.prijs_ex_btw,
-                        0
-                      ) * 100
-                    ) / 100
-                  )}
-                </span>
-              </p>
-              <p className="text-sm text-muted">
-                BTW{" "}
-                <span className="ml-2 inline-block min-w-[6rem] tabular-nums text-ink">
-                  {formatEuro(
-                    Math.round(
-                      (totaalInc -
-                        previewLines.reduce(
-                          (s, l) => s + l.aantal * l.prijs_ex_btw,
-                          0
-                        )) *
-                        100
-                    ) / 100
-                  )}
-                </span>
-              </p>
-              {useKorting &&
-                kortingInc > 0 &&
-                kortingZichtbaar === "zichtbaar" && (
-                  <p className="text-sm font-semibold text-green-deeper">
-                    Korting{" "}
-                    <span className="ml-2 inline-block min-w-[6rem] tabular-nums">
-                      {formatEuro(-kortingInc)}
-                    </span>
-                  </p>
-                )}
-              <p className="font-display text-lg font-semibold text-green-deeper">
-                Totaal incl. btw{" "}
-                <span className="ml-2 tabular-nums">
-                  {formatEuro(totaalInc)}
-                </span>
-              </p>
+              {(() => {
+                const brutoEx =
+                  Math.round(
+                    previewLines
+                      .filter((l) => !isKortingRegel(l))
+                      .reduce((s, l) => s + l.aantal * l.prijs_ex_btw, 0) * 100
+                  ) / 100;
+                const kortingEx =
+                  Math.round(
+                    previewLines
+                      .filter((l) => isKortingRegel(l))
+                      .reduce((s, l) => s + l.aantal * l.prijs_ex_btw, 0) * 100
+                  ) / 100;
+                const netEx = Math.round((brutoEx + kortingEx) * 100) / 100;
+                const btw = Math.round((totaalInc - netEx) * 100) / 100;
+                return (
+                  <>
+                    <p className="text-sm text-muted">
+                      Subtotaal excl. btw{" "}
+                      <span className="ml-2 inline-block min-w-[6rem] tabular-nums text-ink">
+                        {formatEuro(brutoEx)}
+                      </span>
+                    </p>
+                    {kortingEx < 0 ? (
+                      <p className="text-sm font-semibold text-green-deeper">
+                        Korting
+                        {kortingZichtbaar === "verborgen"
+                          ? " (intern)"
+                          : ""}{" "}
+                        <span className="ml-2 inline-block min-w-[6rem] tabular-nums">
+                          {formatEuro(kortingEx)}
+                        </span>
+                      </p>
+                    ) : null}
+                    {kortingEx < 0 ? (
+                      <p className="text-sm text-muted">
+                        Totaal excl. btw{" "}
+                        <span className="ml-2 inline-block min-w-[6rem] tabular-nums text-ink">
+                          {formatEuro(netEx)}
+                        </span>
+                      </p>
+                    ) : null}
+                    <p className="text-sm text-muted">
+                      BTW{" "}
+                      <span className="ml-2 inline-block min-w-[6rem] tabular-nums text-ink">
+                        {formatEuro(btw)}
+                      </span>
+                    </p>
+                    <p className="font-display text-lg font-semibold text-green-deeper">
+                      Totaal incl. btw{" "}
+                      <span className="ml-2 tabular-nums">
+                        {formatEuro(totaalInc)}
+                      </span>
+                    </p>
+                  </>
+                );
+              })()}
             </div>
 
             {error && (

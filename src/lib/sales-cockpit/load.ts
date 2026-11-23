@@ -1,6 +1,10 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { fromZonedTime } from "date-fns-tz";
-import { isAdminAdviseur, isPlanbaarAdviseur } from "@/lib/admin-adviseur";
+import {
+  isAdminAdviseur,
+  isLeaderboardAdviseur,
+  isPlanbaarAdviseur,
+} from "@/lib/admin-adviseur";
 import {
   buildBelConversie,
   type BelConversieAfspraak,
@@ -1090,8 +1094,19 @@ export async function buildSalesCockpitReport(
   const [adviseurRows, appointments, offers] = await Promise.all([
     sb
       .from("adviseurs")
-      .select("id, naam, actief, rol, email, startdatum, commissie_pct")
-      .order("naam"),
+      .select(
+        "id, naam, actief, geblokkeerd, rol, email, startdatum, commissie_pct"
+      )
+      .order("naam")
+      .then(async (res) => {
+        if (res.error?.message?.includes("geblokkeerd")) {
+          return sb
+            .from("adviseurs")
+            .select("id, naam, actief, rol, email, startdatum, commissie_pct")
+            .order("naam");
+        }
+        return res;
+      }),
     loadAppointments(sb),
     loadOffers(sb),
   ]);
@@ -1101,6 +1116,7 @@ export async function buildSalesCockpitReport(
     id: string;
     naam: string;
     actief: boolean;
+    geblokkeerd: boolean;
     rol: string | null;
     email: string | null;
     startdatum: string | null;
@@ -1110,6 +1126,7 @@ export async function buildSalesCockpitReport(
     id: String(row.id),
     naam: String(row.naam || "Onbekend"),
     actief: row.actief !== false,
+    geblokkeerd: row.geblokkeerd === true,
     rol: (row.rol as string | null) ?? null,
     email: (row.email as string | null) ?? null,
     startdatum: (row.startdatum as string | null) ?? null,
@@ -1505,7 +1522,7 @@ export async function buildSalesCockpitReport(
     return 0;
   });
   const weekLeaderboard = buildWeekLeaderboard({
-    advisors: advisors.filter((a) => isPlanbaarAdviseur(a)),
+    advisors: advisors.filter((a) => isLeaderboardAdviseur(a)),
     dossiers,
     appointments,
     leadStatusById,

@@ -3,9 +3,8 @@ import type { Offerte, OfferteRegel } from "@/types/database";
 import { formatDateNl, formatDateTimeNl, formatEuro } from "@/lib/format";
 import { companyInfo, loadLogoDataUrl } from "@/lib/pdf-brand";
 import {
+  offertePrijsSpecificatie,
   offerteRegelsVoorWeergave,
-  zichtbareKortingIncVanRegels,
-  zichtbareOfferteTotalen,
 } from "@/lib/offerte-regels";
 
 type SignPayload = {
@@ -235,8 +234,10 @@ export async function buildOffertePdf(input: PdfInput): Promise<Blob> {
   const weergaveRegels = offerteRegelsVoorWeergave(regels, {
     financieringVoorbehoud: offerte.financiering_voorbehoud,
   });
-  const kortingInc = zichtbareKortingIncVanRegels(regels);
-  const zichtbaarTotaal = zichtbareOfferteTotalen(offerte, regels);
+  const spec = offertePrijsSpecificatie(offerte, regels);
+  const klantBrutoEx = spec.toonKortingOpKlantOfferte
+    ? Math.round((spec.netEx - spec.zichtbareKortingEx) * 100) / 100
+    : spec.netEx;
 
   doc.setDrawColor(...DEEPER);
   doc.setLineWidth(0.7);
@@ -267,31 +268,45 @@ export async function buildOffertePdf(input: PdfInput): Promise<Blob> {
   }
 
   y += 8;
-  y = ensureSpace(doc, y, 30 + (kortingInc < 0 ? 8 : 0), pageW, margin);
+  y = ensureSpace(
+    doc,
+    y,
+    30 + (spec.toonKortingOpKlantOfferte ? 16 : 0),
+    pageW,
+    margin
+  );
 
   // —— Totalen (rechts, zelfde kaders als pagina) ——
   const boxW = 78;
   const boxX = pageW - margin - boxW;
-  const totalRows: { label: string; value: string; bold?: boolean }[] = [
-    {
-      label: "Totaal excl. BTW",
-      value: formatEuro(zichtbaarTotaal.subtotaalEx),
-    },
-    {
-      label: "21% BTW",
-      value: formatEuro(zichtbaarTotaal.btw),
-    },
-  ];
-  if (kortingInc < 0) {
+  const totalRows: { label: string; value: string; bold?: boolean }[] = [];
+  if (spec.toonKortingOpKlantOfferte) {
+    totalRows.push({
+      label: "Subtotaal excl. BTW",
+      value: formatEuro(klantBrutoEx),
+    });
     totalRows.push({
       label: "Korting",
-      value: formatEuro(kortingInc),
+      value: formatEuro(spec.zichtbareKortingEx),
       bold: true,
+    });
+    totalRows.push({
+      label: "Totaal excl. BTW",
+      value: formatEuro(spec.netEx),
+    });
+  } else {
+    totalRows.push({
+      label: "Totaal excl. BTW",
+      value: formatEuro(spec.netEx),
     });
   }
   totalRows.push({
+    label: "21% BTW",
+    value: formatEuro(spec.btw),
+  });
+  totalRows.push({
     label: "Totaal incl. BTW",
-    value: formatEuro(zichtbaarTotaal.totaalInc),
+    value: formatEuro(spec.totaalInc),
     bold: true,
   });
 

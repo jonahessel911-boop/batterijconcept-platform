@@ -1555,6 +1555,51 @@ export function installatieKlantEmail(opts: {
   });
 }
 
+/** Klant: bestaande installatieafspraak is verzet (nieuwe datum én tijd). */
+export function installatieKlantWijzigingEmail(opts: {
+  naam: string;
+  installatieAt: string | Date;
+  vorigeInstallatieAt?: string | Date | null;
+  adres?: string | null;
+  projectNummer?: string | null;
+  trackUrl?: string | null;
+}) {
+  const first = opts.naam.split(" ")[0] || opts.naam;
+  const nieuw = formatDateTimeLongNl(opts.installatieAt);
+  const vorige = opts.vorigeInstallatieAt
+    ? formatDateTimeLongNl(opts.vorigeInstallatieAt)
+    : null;
+  const venster = planningVensterNl(opts.installatieAt);
+  return emailLayout({
+    title: "Wijziging installatieafspraak — Batterijconcept",
+    preheader: `Je installatie staat nu op ${nieuw}.`,
+    bodyHtml: [
+      emailH1("Wijziging installatieafspraak"),
+      emailP(`Hoi ${first},`),
+      emailP(
+        "Je installatieafspraak is gewijzigd. Noteer de nieuwe datum en tijd hieronder."
+      ),
+      emailBox(
+        `<p style="margin:0 0 8px;font-size:15px;"><strong>Nieuwe installatie</strong><br />${nieuw}</p>
+         <p style="margin:0 0 8px;font-size:15px;"><strong>Tijdvenster</strong><br />${venster.label}</p>
+         ${vorige ? `<p style="margin:0 0 8px;font-size:15px;"><strong>Was eerder</strong><br />${vorige}</p>` : ""}
+         ${opts.adres ? `<p style="margin:0 0 8px;font-size:15px;"><strong>Adres</strong><br />${opts.adres}</p>` : ""}
+         ${opts.projectNummer ? `<p style="margin:0;font-size:15px;"><strong>Project</strong><br />${opts.projectNummer}</p>` : ""}`
+      ),
+      emailP(
+        "Zorg dat er iemand thuis is op dit moment. Kun je niet? Mail info@batterijconcept.nl of bel 085 800 1645, dan kijken we mee."
+      ),
+      opts.trackUrl
+        ? [
+            emailP("In track &amp; trace zie je altijd de actuele afspraak."),
+            emailButton("Volg je order", opts.trackUrl),
+          ].join("")
+        : "",
+      emailMuted("Tot dan, team Batterijconcept"),
+    ].join(""),
+  });
+}
+
 /** Teamgenoot onder installatiepartner: persoonlijke portaallink */
 export function teamgenootPortaalWelkomEmail(opts: {
   naam: string;
@@ -1603,18 +1648,29 @@ export function installatiePartnerEmail(opts: {
   projectNummer?: string | null;
   notities?: string | null;
   portalUrl: string;
+  wijziging?: boolean;
 }) {
   const first = opts.partnerNaam.split(" ")[0] || opts.partnerNaam;
   const when = formatDateTimeLongNl(opts.installatieAt);
   const venster = planningVensterNl(opts.installatieAt);
   return emailLayout({
-    title: "Nieuwe installatie ingepland",
-    preheader: `Installatie ${opts.klantNaam} op ${when}.`,
+    title: opts.wijziging
+      ? "Installatieafspraak gewijzigd"
+      : "Nieuwe installatie ingepland",
+    preheader: opts.wijziging
+      ? `Gewijzigd: installatie ${opts.klantNaam} op ${when}.`
+      : `Installatie ${opts.klantNaam} op ${when}.`,
     bodyHtml: [
-      emailH1("Nieuwe installatie ingepland"),
+      emailH1(
+        opts.wijziging
+          ? "Installatieafspraak gewijzigd"
+          : "Nieuwe installatie ingepland"
+      ),
       emailP(`Hoi ${first},`),
       emailP(
-        "Er staat een installatie voor je ingepland. Bekijk de details in het installatieportaal."
+        opts.wijziging
+          ? "De installatieafspraak is verzet. Noteer de nieuwe datum en tijd hieronder. In het installatieportaal zie je de volledige order."
+          : "Er staat een installatie voor je ingepland. Bekijk de details in het installatieportaal."
       ),
       emailBox(
         `<p style="margin:0 0 8px;font-size:15px;"><strong>Datum &amp; tijd</strong><br />${when}</p>

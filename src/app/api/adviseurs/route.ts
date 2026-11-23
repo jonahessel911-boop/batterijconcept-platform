@@ -45,7 +45,7 @@ import { AMSTERDAM_TZ } from "@/lib/format";
 export const runtime = "nodejs";
 
 const ADVISEUR_PUBLIC =
-  "id, naam, email, factuur_email, telefoon, unite_lijn, unite_ext, actief, geblokkeerd, werktijd_start, werktijd_eind, start_adres, start_vanaf_huis_maandag, startdatum, bel_planning, rol, commissie_pct, bedrijfsnaam, kvk_nummer, btw_nummer, factuur_adres, factuur_postcode, factuur_plaats, iban, max_factuur_bedrag, contract_storage_path, contract_bestandsnaam, contract_uploaded_at, contract_sign_token, contract_sign_status, contract_sent_at, contract_signed_at, kvk_uitreksel_storage_path, kvk_uitreksel_bestandsnaam, kvk_uitreksel_uploaded_at, interne_notities, profielfoto_path, created_at, updated_at";
+  "id, naam, email, factuur_email, telefoon, unite_lijn, unite_ext, actief, geblokkeerd, werktijd_start, werktijd_eind, start_adres, start_vanaf_huis_maandag, startdatum, bel_planning, rol, commissie_pct, bedrijfsnaam, kvk_nummer, btw_nummer, factuur_adres, factuur_postcode, factuur_plaats, iban, max_factuur_bedrag, contract_storage_path, contract_bestandsnaam, contract_uploaded_at, contract_sign_token, contract_sign_status, contract_sign_fields, contract_sent_at, contract_signed_at, kvk_uitreksel_storage_path, kvk_uitreksel_bestandsnaam, kvk_uitreksel_uploaded_at, interne_notities, profielfoto_path, created_at, updated_at";
 const ADVISEUR_PUBLIC_NO_FACTUUR_EMAIL = ADVISEUR_PUBLIC.replace(
   "email, factuur_email, ",
   "email, "
@@ -732,6 +732,13 @@ export async function PATCH(req: NextRequest) {
     }
     if (typeof body.geblokkeerd === "boolean") {
       patch.geblokkeerd = body.geblokkeerd;
+    }
+    // Inactief/blokkeren: standaard uit bel-planning, tenzij expliciet meegestuurd.
+    if (
+      body.bel_planning === undefined &&
+      (body.actief === false || body.geblokkeerd === true)
+    ) {
+      patch.bel_planning = false;
     }
     if (body.start_adres !== undefined) {
       patch.start_adres = body.start_adres?.trim() || null;

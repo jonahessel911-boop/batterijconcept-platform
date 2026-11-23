@@ -30,6 +30,7 @@ import { cn } from "@/lib/utils";
 import { normalizeProjectStatus } from "@/lib/labels";
 import { toOperationalStatus } from "@/lib/project-status-config";
 import { formatDateTimeNl } from "@/lib/format";
+import { installatieIsOpgeleverd } from "@/lib/installatie-opgeleverd";
 
 const SHOW_FROM = new Set([
   "installatie_ingepland",
@@ -241,6 +242,35 @@ export function ProjectAfrondingChecklist({
   }, [project.id, project.monteur_beoordeling_notitie]);
 
   if (!showProjectAfronding(project)) return null;
+
+  if (!installatieIsOpgeleverd(project)) {
+    const wachtTekst =
+      "Wachten op oplever formulier. After sale (overstap, BTW, review) start pas als de installatie is opgeleverd.";
+    if (compact) {
+      return (
+        <div className="rounded-lg border border-border bg-wash/40 px-3 py-3">
+          <p className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
+            After sale
+          </p>
+          <p className="mt-1 text-sm font-medium text-foreground">
+            Wachten op oplever formulier
+          </p>
+          <p className="mt-1 text-[13px] text-muted-foreground">{wachtTekst}</p>
+        </div>
+      );
+    }
+    return (
+      <section className="border border-line bg-white px-4 py-4 sm:px-5">
+        <h2 className="text-[11px] font-semibold uppercase tracking-[0.1em] text-muted">
+          After sale
+        </h2>
+        <p className="mt-2 text-sm font-medium text-ink">
+          Wachten op oplever formulier
+        </p>
+        <p className="mt-1 text-[11px] text-muted">{wachtTekst}</p>
+      </section>
+    );
+  }
 
   const status = normalizeProjectStatus(project.status);
   const isAfterSale = status === "afgerond";

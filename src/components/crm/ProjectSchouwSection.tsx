@@ -312,12 +312,26 @@ export function ProjectSchouwSection({
           installatie_at: parsed.toISOString(),
           installatie_partner_id: partnerId,
           installatie_notities: installatieNotities || null,
+          installatie_koppel_id: project.installatie_koppel_id || undefined,
         }),
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || "Inplannen mislukt");
 
-      setOkMsg("Installatie ingepland.");
+      const wijziging = Boolean(data.mails?.klant?.wijziging);
+      const mailOk = data.mails?.klant?.ok;
+      setOkMsg(
+        wijziging
+          ? mailOk
+            ? "Installatie gewijzigd — wijzigingsmail naar klant verstuurd."
+            : "Installatie gewijzigd."
+          : mailOk
+            ? "Installatie ingepland — bevestiging naar klant verstuurd."
+            : "Installatie ingepland."
+      );
+      if (!mailOk && data.mails?.klant?.error) {
+        setError(data.mails.klant.error as string);
+      }
       onChanged();
     } catch (err) {
       setError(err instanceof Error ? err.message : "Fout");
@@ -682,7 +696,7 @@ export function ProjectSchouwSection({
                 {installatieSaving
                   ? "Bezig…"
                   : project.installatie_at
-                    ? "Installatie bijwerken"
+                    ? "Installatie wijzigen en klant mailen"
                     : "Installatie inplannen"}
               </button>
               {installatieGepland && !installatieVoltooid ? (

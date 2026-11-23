@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import type { Factuur, Project } from "@/types/database";
 import { Check } from "lucide-react";
 import {
@@ -29,6 +29,7 @@ import {
   kickoffWarmtefondsBedragen,
   projectKickoffItems,
   showProjectKickoff,
+  type KickoffExtra,
   type KickoffItemId,
 } from "@/lib/project-kickoff";
 import {
@@ -46,6 +47,7 @@ import {
 } from "@/lib/schouw-week";
 import { isAanbetalingFactuurOmschrijving } from "@/lib/aanbetaling";
 import { formatEuro } from "@/lib/format";
+import { parseTcSwissIntakeStored } from "@/lib/tcswiss-intake";
 
 function toDatetimeLocalValue(iso: string | null | undefined): string {
   if (!iso) return "";
@@ -118,6 +120,46 @@ export function ProjectKickoffChecklist({
   );
   const [checkingId, setCheckingId] = useState<KickoffItemId | null>(null);
   const [confirmId, setConfirmId] = useState<KickoffItemId | null>(null);
+  const [wpApplicable, setWpApplicable] = useState(false);
+  const [wpSent, setWpSent] = useState(false);
+  const [wpConfigured, setWpConfigured] = useState(true);
+
+  const kickoffExtra: KickoffExtra = useMemo(
+    () => ({ warmtepomp: wpApplicable, tcswissSent: wpSent }),
+    [wpApplicable, wpSent]
+  );
+
+  useEffect(() => {
+    let cancelled = false;
+    void (async () => {
+      try {
+        const res = await fetch(`/api/projecten/${project.id}/tcswiss-intake`);
+        const data = (await res.json().catch(() => ({}))) as {
+          applicable?: boolean;
+          sent?: boolean;
+          configured?: boolean;
+        };
+        if (cancelled) return;
+        if (!res.ok) return;
+        setWpApplicable(Boolean(data.applicable));
+        setWpSent(Boolean(data.sent));
+        setWpConfigured(data.configured !== false);
+      } catch {
+        /* geen extra stap als status niet te laden is */
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [project.id]);
+
+  useEffect(() => {
+    const stored = parseTcSwissIntakeStored(project.materiaal_checks);
+    if (stored) {
+      setWpSent(true);
+      setWpApplicable(true);
+    }
+  }, [project.materiaal_checks]);
 
   const weekOptions = useMemo(() => upcomingSchouwWeekOptions(40), []);
   const recommended = useMemo(
@@ -131,9 +173,9 @@ export function ProjectKickoffChecklist({
     defaultSchouwdagLocal(recommended.jaar, recommended.week)
   );
 
-  if (!showProjectKickoff(project, facturen)) return null;
+  if (!showProjectKickoff(project, facturen, kickoffExtra)) return null;
 
-  const items = projectKickoffItems(project, facturen);
+  const items = projectKickoffItems(project, facturen, kickoffExtra);
   const open = items.filter((i) => !i.done);
   const done = items.filter((i) => i.done);
   const lead = Array.isArray(project.leads) ? project.leads[0] : project.leads;
@@ -184,9 +226,15 @@ export function ProjectKickoffChecklist({
   /** Alle stappen klaar → bel_schouw + bij WF status afwachten_wf. */
   async function finalizeKickoffIfReady(
     nextProject: Project,
-    nextFacturen: Factuur[]
+    nextFacturen: Factuur[],
+    extra: KickoffExtra = kickoffExtra
   ): Promise<Project | null> {
-    const patch = kickoffCompletionPatch(nextProject, nextFacturen);
+    const patch = kickoffCompletionPatch(
+      nextProject,
+      nextFacturen,
+      new Date(),
+      extra
+    );
     if (!patch) return null;
     const res = await fetch(`/api/projecten/${nextProject.id}`, {
       method: "PATCH",
@@ -289,6 +337,50 @@ export function ProjectKickoffChecklist({
       throw e;
     } finally {
       setFacBusy(false);
+    }
+  }
+
+  async function stuurNaarTcSwiss() {
+    setActionError(null);
+    setActionHint(null);
+    if (!wpConfigured) {
+      throw new Error(
+        "TC Swiss is niet geconfigureerd (TCSWISS_RELAYPRO_TOKEN ontbreekt)."
+      );
+    }
+    const res = await fetch(`/api/projecten/${project.id}/tcswiss-intake`, {
+      method: "POST",
+    });
+    const data = (await res.json().catch(() => ({}))) as {
+      error?: string;
+      ok?: boolean;
+      alreadySent?: boolean;
+      duplicate?: boolean;
+      lead?: string | null;
+      materiaal_checks?: Record<string, boolean | string>;
+    };
+    if (!res.ok) {
+      throw new Error(data.error || "Inschieten bij TC Swiss mislukt");
+    }
+    setWpSent(true);
+    setWpApplicable(true);
+    const nextProject: Project = {
+      ...project,
+      materiaal_checks: data.materiaal_checks || project.materiaal_checks,
+    };
+    onProjectUpdated?.(nextProject);
+    const finalized = await finalizeKickoffIfReady(nextProject, facturen, {
+      warmtepomp: true,
+      tcswissSent: true,
+    });
+    const leadLabel = data.lead ? ` · ${data.lead}` : "";
+    setActionHint(
+      data.alreadySent || data.duplicate
+        ? `Al bekend bij TC Swiss${leadLabel}`
+        : `Order ingeschoten bij TC Swiss${leadLabel}`
+    );
+    if (finalized) {
+      /* onProjectUpdated al via finalize */
     }
   }
 
@@ -449,6 +541,13 @@ export function ProjectKickoffChecklist({
           "Je vinkt af dat de klant in het Warmtefonds-portaal staat. Er gaat geen mail de deur uit.",
       };
     }
+    if (id === "tcswiss") {
+      return {
+        title: "Order inschieten bij TC Swiss?",
+        description:
+          "De klantgegevens van deze warmtepomp-order gaan naar TC Swiss. Dit kan niet ongedaan gemaakt worden vanuit het CRM.",
+      };
+    }
     return {
       title: "Weet je zeker dat je dit wilt zetten?",
       description: wf
@@ -477,6 +576,8 @@ export function ProjectKickoffChecklist({
       } else if (id === "schouwweek") {
         if (wf) await planSchouwweek({ silent: true });
         else await planSchouwdag({ silent: true });
+      } else if (id === "tcswiss") {
+        await stuurNaarTcSwiss();
       }
     } catch {
       setOptimisticDone((prev) => {
@@ -591,7 +692,11 @@ export function ProjectKickoffChecklist({
                     disabled={busy}
                     onClick={() => vraagBevestiging(item.id)}
                   >
-                    {busy ? "…" : "Check"}
+                    {busy
+                      ? "…"
+                      : item.id === "tcswiss"
+                        ? "Stuur naar TC Swiss"
+                        : "Check"}
                   </Button>
                 ) : null}
               </Item>
@@ -675,7 +780,11 @@ export function ProjectKickoffChecklist({
                   disabled={checkingId === item.id}
                   onClick={() => vraagBevestiging(item.id)}
                 >
-                  {checkingId === item.id ? "…" : "Check"}
+                  {checkingId === item.id
+                    ? "…"
+                    : item.id === "tcswiss"
+                      ? "Stuur naar TC Swiss"
+                      : "Check"}
                 </Button>
               )}
             </li>

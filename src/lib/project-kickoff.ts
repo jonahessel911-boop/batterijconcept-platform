@@ -25,6 +25,7 @@ import {
   formatProjectSchouwWeek,
   isSchouwdagDefinitief,
 } from "@/lib/schouw-week";
+import { parseTcSwissIntakeStored } from "@/lib/tcswiss-intake";
 
 /**
  * Statussen ná opstarten (installatie-keten). Schouwweek-placeholder hoort
@@ -62,7 +63,17 @@ export function isProjectPastKickoff(project: Project): boolean {
   return PAST_KICKOFF_STATUS.has(op);
 }
 
-export type KickoffItemId = "aanbetaling" | "wf_afspraak" | "schouwweek";
+export type KickoffItemId =
+  | "aanbetaling"
+  | "wf_afspraak"
+  | "schouwweek"
+  | "tcswiss";
+
+/** Extra opstart-stap: warmtepomp-order naar TC Swiss. */
+export type KickoffExtra = {
+  warmtepomp?: boolean;
+  tcswissSent?: boolean;
+};
 
 export type KickoffItem = {
   id: KickoffItemId;
@@ -164,7 +175,8 @@ export function isWfAfspraakKickoffDone(project: Project): boolean {
 
 export function projectKickoffItems(
   project: Project,
-  facturen: Factuur[] = []
+  facturen: Factuur[] = [],
+  extra?: KickoffExtra
 ): KickoffItem[] {
   const wf = isWarmtefondsProject(project);
   const geenAanbetaling = projectHeeftGeenAanbetalingNodig(project);
@@ -217,6 +229,23 @@ export function projectKickoffItems(
         ? "Eerst eerste factuur als betaald markeren"
         : "Check als dit is gezet",
   });
+
+  const tcswissStored = parseTcSwissIntakeStored(project.materiaal_checks);
+  const wp = Boolean(extra?.warmtepomp) || Boolean(tcswissStored);
+  const tcswissSent =
+    extra?.tcswissSent ?? Boolean(tcswissStored);
+  if (wp) {
+    items.push({
+      id: "tcswiss",
+      label: "TC Swiss",
+      done: tcswissSent,
+      detail: tcswissSent
+        ? tcswissStored?.lead
+          ? `Ingeschoten · ${tcswissStored.lead}`
+          : "Ingeschoten bij TC Swiss"
+        : "Stuur de warmtepomp-order naar TC Swiss",
+    });
+  }
 
   return items;
 }
@@ -290,14 +319,15 @@ export function kickoffWarmtefondsBedragen(
 
 export function isKickoffComplete(
   project: Project,
-  facturen: Factuur[] = []
+  facturen: Factuur[] = [],
+  extra?: KickoffExtra
 ): boolean {
   // Expliciet afgerond (alle stappen gedaan of handmatig dicht)
   if (project.bel_schouw_aanbetaling_at) return true;
   // Verder in de keten (definitieve schouwdag / installatie) → klaar
   if (isProjectPastKickoff(project)) return true;
   // Anders: alleen de open checklist telt — schouwweek alleen ≠ klaar
-  return projectKickoffItems(project, facturen).every((i) => i.done);
+  return projectKickoffItems(project, facturen, extra).every((i) => i.done);
 }
 
 /**
@@ -311,7 +341,8 @@ export function isKickoffComplete(
 export function kickoffCompletionPatch(
   project: Project,
   facturen: Factuur[] = [],
-  now = new Date()
+  now = new Date(),
+  extra?: KickoffExtra
 ): {
   bel_schouw_aanbetaling_at?: string;
   status?: "opstarten_voltooid_afwachten_wf" | "schouw_inplannen";
@@ -321,9 +352,12 @@ export function kickoffCompletionPatch(
     return null;
   }
 
-  const itemsDone = projectKickoffItems(project, facturen).every((i) => i.done);
+  const itemsDone = projectKickoffItems(project, facturen, extra).every(
+    (i) => i.done
+  );
   const belSet = Boolean(project.bel_schouw_aanbetaling_at);
-  const kickoffDone = itemsDone || belSet || isKickoffComplete(project, facturen);
+  const kickoffDone =
+    itemsDone || belSet || isKickoffComplete(project, facturen, extra);
   if (!kickoffDone) return null;
 
   const wf = isWarmtefondsProject(project);
@@ -354,16 +388,19 @@ export function kickoffCompletionPatch(
  */
 export function showProjectKickoff(
   project: Project,
-  facturen: Factuur[] = []
+  facturen: Factuur[] = [],
+  extra?: KickoffExtra
 ): boolean {
   if (project.status === "annulering") return false;
   if (project.status === "hold_sales_actie") return false;
-  if (project.bel_schouw_aanbetaling_at) return false;
   if (project.installatie_at || project.installatie_voltooid_at) return false;
   if (isSchouwdagDefinitief(project)) return false;
   const op = toOperationalStatus(project.status);
   if (op === "schouwdag_ingepland" || PAST_KICKOFF_STATUS.has(op)) {
     return false;
   }
-  return !projectKickoffItems(project, facturen).every((i) => i.done);
+  const items = projectKickoffItems(project, facturen, extra);
+  const tcswissOpen = items.some((i) => i.id === "tcswiss" && !i.done);
+  if (project.bel_schouw_aanbetaling_at && !tcswissOpen) return false;
+  return !items.every((i) => i.done);
 }

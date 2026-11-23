@@ -40,6 +40,7 @@ import { isSpareAdviseur } from "@/lib/admin-adviseur";
 import { adviseurProfielfotoPublicUrl } from "@/lib/adviseur-profielfoto";
 import { WfPartnerTariefVeld } from "./WfPartnerTariefVeld";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
+import { OffboardingDocument } from "./OffboardingDocument";
 import {
   EDERGY_PER_AANVRAAG_EXCL,
   edergyBedragenVanInc,
@@ -208,6 +209,13 @@ export function InstellingenPanel({
   const [confirmPassword, setConfirmPassword] = useState("");
   const [passwordSaving, setPasswordSaving] = useState(false);
   const [loginAlsId, setLoginAlsId] = useState<string | null>(null);
+  const [offboardIngang, setOffboardIngang] = useState("");
+  const [offboardSlot, setOffboardSlot] = useState("");
+  const [offboardBusy, setOffboardBusy] = useState(false);
+  const [nietGelopenCount, setNietGelopenCount] = useState(0);
+  const [medewerkerTab, setMedewerkerTab] = useState<"account" | "planning">(
+    "account"
+  );
 
   useEffect(() => {
     if (teamOnly) setFilter("medewerkers");
@@ -352,6 +360,7 @@ export function InstellingenPanel({
           : 10,
       actief: a.actief !== false,
       geblokkeerd: a.geblokkeerd === true,
+      bel_planning: a.bel_planning !== false,
       bedrijfsnaam: a.bedrijfsnaam ?? "",
       kvk_nummer: a.kvk_nummer ?? "",
       btw_nummer: a.btw_nummer ?? "",
@@ -365,6 +374,7 @@ export function InstellingenPanel({
       contract_bestandsnaam: a.contract_bestandsnaam ?? null,
       contract_uploaded_at: a.contract_uploaded_at ?? null,
       contract_sign_status: a.contract_sign_status ?? null,
+      contract_sign_fields: a.contract_sign_fields ?? null,
       contract_signed_at: a.contract_signed_at ?? null,
       kvk_uitreksel_storage_path: a.kvk_uitreksel_storage_path ?? null,
       kvk_uitreksel_bestandsnaam: a.kvk_uitreksel_bestandsnaam ?? null,
@@ -374,8 +384,23 @@ export function InstellingenPanel({
     });
     setNewPassword("");
     setConfirmPassword("");
+    setMedewerkerTab("account");
+    setOffboardIngang("");
+    setOffboardSlot("");
+    setNietGelopenCount(0);
     setError(null);
     setOkMsg(null);
+    void fetch(
+      `/api/afspraken/niet-gelopen-adviseur?adviseur_ids=${encodeURIComponent(a.id)}`
+    )
+      .then((r) => r.json())
+      .then((d) => {
+        const n = Number(d?.counts?.[a.id] || 0);
+        setNietGelopenCount(Number.isFinite(n) ? n : 0);
+      })
+      .catch(() => {
+        setNietGelopenCount(0);
+      });
   }
 
   function openPartner(p: InstallatiePartner) {
@@ -495,6 +520,7 @@ export function InstellingenPanel({
     setWfDraft(null);
     setNewPassword("");
     setConfirmPassword("");
+    setMedewerkerTab("account");
   }
 
   async function addEntry(e: React.FormEvent) {
@@ -572,6 +598,54 @@ export function InstellingenPanel({
     }
   }
 
+  async function downloadOffboardingPdf() {
+    if (!selectedAdviseur) return;
+    if (!offboardIngang || !offboardSlot) {
+      setError("Vul ingangsdatum en slotdatum in.");
+      return;
+    }
+    setOffboardBusy(true);
+    setError(null);
+    try {
+      const res = await fetch(
+        `/api/adviseurs/${encodeURIComponent(selectedAdviseur.id)}/offboarding-pdf`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            ingangsdatum: offboardIngang,
+            slotdatum: offboardSlot,
+          }),
+        }
+      );
+      if (!res.ok) {
+        const data = (await res.json().catch(() => ({}))) as {
+          error?: string;
+        };
+        throw new Error(data.error || "PDF maken mislukt");
+      }
+      const blob = await res.blob();
+      const disp = res.headers.get("Content-Disposition") || "";
+      const match = disp.match(/filename="([^"]+)"/);
+      const name =
+        match?.[1] ||
+        `Offboarding ${selectedAdviseur.naam}.pdf`;
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = name;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+      setOkMsg("Offboarding-PDF gedownload.");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "PDF maken mislukt");
+    } finally {
+      setOffboardBusy(false);
+    }
+  }
+
   async function saveMedewerker() {
     if (!selectedAdviseur || !draft) return;
     setDetailSaving(true);
@@ -592,6 +666,7 @@ export function InstellingenPanel({
         start_vanaf_huis_maandag: draft.start_vanaf_huis_maandag === true,
         actief: draft.actief !== false,
         geblokkeerd: draft.geblokkeerd === true,
+        bel_planning: draft.bel_planning !== false,
       };
       if (isSalesRol(draft.rol)) {
         const pct = Number(draft.commissie_pct) || 0;
@@ -1136,6 +1211,11 @@ export function InstellingenPanel({
                       Geblokkeerd
                     </span>
                   ) : null}
+                  {nietGelopenCount > 0 ? (
+                    <span className="inline-block bg-[#FDECEA] px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-[#C62828]">
+                      Niet gelopen {nietGelopenCount}
+                    </span>
+                  ) : null}
                 </div>
                 {(sales || opsCommissieLabel) && (
                   <p className="mt-0.5 truncate text-[12px] text-muted">
@@ -1172,6 +1252,7 @@ export function InstellingenPanel({
                         ...d,
                         actief: false,
                         geblokkeerd: false,
+                        bel_planning: false,
                       }))
                     }
                     className={[
@@ -1190,7 +1271,12 @@ export function InstellingenPanel({
                     setDraft((d) =>
                       geblokkeerd
                         ? { ...d, geblokkeerd: false }
-                        : { ...d, geblokkeerd: true, actief: false }
+                        : {
+                            ...d,
+                            geblokkeerd: true,
+                            actief: false,
+                            bel_planning: false,
+                          }
                     )
                   }
                   className={[
@@ -1221,7 +1307,93 @@ export function InstellingenPanel({
             </div>
           )}
 
+          <div className="flex gap-1 border-b border-line px-4 pt-2 sm:px-5">
+            {(
+              [
+                { id: "account" as const, label: "Account" },
+                { id: "planning" as const, label: "Actief in planning" },
+              ] as const
+            ).map((tab) => (
+              <button
+                key={tab.id}
+                type="button"
+                onClick={() => setMedewerkerTab(tab.id)}
+                className={[
+                  "-mb-px border-b-2 px-3 py-2 text-xs font-semibold",
+                  medewerkerTab === tab.id
+                    ? "border-green text-ink"
+                    : "border-transparent text-muted hover:text-ink",
+                ].join(" ")}
+              >
+                {tab.label}
+              </button>
+            ))}
+          </div>
+
+          {medewerkerTab === "planning" ? (
+            <div className="px-4 py-5 sm:px-5">
+              <p className="text-[11px] font-semibold uppercase tracking-wide text-muted">
+                Actief in planning
+              </p>
+              <p className="mt-1 max-w-lg text-sm text-muted">
+                Of deze persoon in het bel-systeem komt (beste slots /
+                automatisch inplannen). Agenda en inloggen blijven los hiervan.
+              </p>
+              <div className="mt-4 inline-flex border border-line p-0.5">
+                <button
+                  type="button"
+                  onClick={() =>
+                    setDraft((d) => ({ ...d, bel_planning: true }))
+                  }
+                  className={[
+                    "px-4 py-1.5 text-xs font-semibold",
+                    draft.bel_planning !== false
+                      ? "bg-green text-white"
+                      : "bg-white text-muted hover:bg-wash",
+                  ].join(" ")}
+                >
+                  Ja
+                </button>
+                <button
+                  type="button"
+                  onClick={() =>
+                    setDraft((d) => ({ ...d, bel_planning: false }))
+                  }
+                  className={[
+                    "px-4 py-1.5 text-xs font-semibold",
+                    draft.bel_planning === false
+                      ? "bg-[#C45A12] text-white"
+                      : "bg-white text-muted hover:bg-wash",
+                  ].join(" ")}
+                >
+                  Nee
+                </button>
+              </div>
+              <p className="mt-3 max-w-lg text-[12px] text-muted">
+                {draft.bel_planning === false
+                  ? "Niet in het bel-systeem. Inactief of blokkeren zet dit standaard op Nee — je kunt het hier weer op Ja zetten."
+                  : "Komt mee in het bel-systeem (als de rol dat toelaat)."}
+              </p>
+            </div>
+          ) : (
           <div className="divide-y divide-line">
+            {rol === "adviseur" ? (
+              <div className="px-4 py-4 sm:px-5">
+                <OffboardingDocument
+                  adviseurId={selectedAdviseur.id}
+                  overeenkomstIngangsdatum={
+                    draft.contract_sign_fields?.ingangsdatum || null
+                  }
+                  ingangsdatum={offboardIngang}
+                  slotdatum={offboardSlot}
+                  onIngangsdatum={setOffboardIngang}
+                  onSlotdatum={setOffboardSlot}
+                  onDownload={() => void downloadOffboardingPdf()}
+                  downloadBusy={offboardBusy}
+                  onCount={setNietGelopenCount}
+                />
+              </div>
+            ) : null}
             {/* Contact */}
             <div className="grid gap-3 px-4 py-3 sm:grid-cols-2 lg:grid-cols-4 sm:px-5">
               <Field label="Naam">
@@ -1686,6 +1858,7 @@ export function InstellingenPanel({
               </div>
             ) : null}
           </div>
+          )}
         </div>
 
         <div className="shrink-0 border-t border-line bg-white px-4 py-2.5 sm:px-5">
@@ -2649,6 +2822,11 @@ export function InstellingenPanel({
                           ? "Actief"
                           : "Inactief"}
                     </span>
+                    {a.bel_planning === false && a.geblokkeerd !== true ? (
+                      <span className="ml-1.5 text-[11px] text-muted">
+                        Uit planning
+                      </span>
+                    ) : null}
                   </td>
                   <td className="max-w-[14rem]">
                     {lastNote ? (

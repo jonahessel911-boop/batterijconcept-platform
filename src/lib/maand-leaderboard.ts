@@ -10,7 +10,7 @@ import {
   factuurIsBetaald,
   isAanbetalingFactuurOmschrijving,
 } from "@/lib/aanbetaling";
-import { isPlanbaarAdviseur } from "@/lib/admin-adviseur";
+import { isLeaderboardAdviseur } from "@/lib/admin-adviseur";
 import { AMSTERDAM_TZ } from "@/lib/format";
 import {
   conversieMonthRangeContaining,
@@ -142,8 +142,16 @@ export async function buildMaandLeaderboard(
     loadAanbetalingenByAdviseur(sb, startYmd, endYmd),
     sb
       .from("adviseurs")
-      .select("id, naam, actief, rol, email")
-      .then((r) => r.data || []),
+      .select("id, naam, actief, geblokkeerd, rol, email")
+      .then((r) => {
+        if (r.error && r.error.message?.includes("geblokkeerd")) {
+          return sb
+            .from("adviseurs")
+            .select("id, naam, actief, rol, email")
+            .then((retry) => retry.data || []);
+        }
+        return r.data || [];
+      }),
   ]);
 
   type Acc = {
@@ -155,7 +163,7 @@ export async function buildMaandLeaderboard(
   const byId = new Map<string, Acc>();
 
   for (const a of adviseurs) {
-    if (!isPlanbaarAdviseur(a)) continue;
+    if (!isLeaderboardAdviseur(a)) continue;
     byId.set(a.id, {
       sales: 0,
       gelopen: 0,
@@ -167,20 +175,12 @@ export async function buildMaandLeaderboard(
   for (const week of rapportage.series) {
     for (const row of week.adviseurs) {
       if (row.key === "__onbekend__") continue;
-      const cur = byId.get(row.key) || {
-        sales: 0,
-        gelopen: 0,
-        ingepland: 0,
-        naam: row.label,
-      };
+      const cur = byId.get(row.key);
+      if (!cur) continue;
       cur.sales += row.sales;
       cur.gelopen += row.gelopen;
       cur.ingepland += row.ingepland;
-      if (!byId.has(row.key)) byId.set(row.key, cur);
-      else {
-        cur.naam = byId.get(row.key)!.naam || row.label;
-        byId.set(row.key, cur);
-      }
+      if (row.label) cur.naam = cur.naam || row.label;
     }
   }
 

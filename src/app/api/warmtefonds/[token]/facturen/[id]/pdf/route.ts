@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { getSupabaseAdmin } from "@/lib/supabase";
 import { errMessage } from "@/lib/errors";
 import { buildFactuurPdf } from "@/lib/pdf-factuur";
+import { loadOfferteKortingEx } from "@/lib/offerte-regels";
 import { selectFactuurById } from "@/lib/factuur-query";
 import {
   isWarmtefondsPortalProject,
@@ -77,11 +78,13 @@ export async function GET(
     const creditVanRaw = factuur.credit_van;
     const creditVan = Array.isArray(creditVanRaw) ? creditVanRaw[0] : creditVanRaw;
     const isCredit = Boolean(factuur.credit_van_factuur_id);
+    const kortingEx = await loadOfferteKortingEx(sb, factuur.offerte_id);
     const blob = await buildFactuurPdf({
       factuur: factuur as never,
       lead: factuur.leads as never,
       offerte,
       creditVanNummer: creditVan?.factuur_nummer || null,
+      kortingEx,
     });
     const bytes = Buffer.from(await blob.arrayBuffer());
     const filename = `${isCredit ? "credit-" : ""}${factuur.factuur_nummer || "factuur"}${

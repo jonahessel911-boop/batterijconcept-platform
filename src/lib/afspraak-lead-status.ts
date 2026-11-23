@@ -7,6 +7,7 @@ const BESCHERMDE_STATUS = new Set([
   "geen_interesse_al_batterij",
   "geen_interesse_plugin",
   "geen_interesse_alleen_info",
+  "geen_interesse_vertrouwt_niet",
   "offerte_afgewezen",
   "niet_gekwalificeerd",
 ]);

@@ -1107,6 +1107,7 @@ function PlanInplannenPanel({
           installatie_at: parsed.toISOString(),
           installatie_partner_id: partnerId,
           installatie_notities: notities.trim() || null,
+          installatie_koppel_id: selected.installatie_koppel_id || undefined,
         }),
       });
       const data = await res.json().catch(() => ({}));
