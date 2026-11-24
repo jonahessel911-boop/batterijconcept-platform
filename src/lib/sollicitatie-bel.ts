@@ -39,9 +39,10 @@ export function mergeBlockedContactKeys(
 }
 
 /** NL-mobiel: laatste 9 cijfers; e-mail lowercase. */
-export function sollicitatieContactKeys(
-  s: Pick<Sollicitatie, "telefoon" | "email">
-): string[] {
+export function sollicitatieContactKeys(s: {
+  telefoon?: string | null;
+  email?: string | null;
+}): string[] {
   const keys: string[] = [];
   const digits = (s.telefoon || "").replace(/\D/g, "");
   if (digits.length >= 9) keys.push(`tel:${digits.slice(-9)}`);

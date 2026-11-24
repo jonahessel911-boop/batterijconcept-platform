@@ -300,7 +300,8 @@ async function loadRecentAfsprakenForAnnuleringen(
       rows.length = 0;
       continue;
     }
-    const chunk = (data || []) as Afspraak[];
+    if (error) throw error;
+    const chunk = (data || []) as unknown as Afspraak[];
     rows.push(...chunk);
     if (chunk.length < 1000) break;
   }
