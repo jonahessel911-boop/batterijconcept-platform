@@ -302,6 +302,9 @@ export function RecruitmentPanel() {
   const [deleteOpen, setDeleteOpen] = useState(false);
   const [deleteStep, setDeleteStep] = useState<1 | 2>(1);
   const [deleting, setDeleting] = useState(false);
+  const [afspraakRemove, setAfspraakRemove] =
+    useState<SollicitatieAfspraak | null>(null);
+  const [removingAfspraak, setRemovingAfspraak] = useState(false);
   const [afspraken, setAfspraken] = useState<SollicitatieAfspraak[]>([]);
   const [leadContactKeys, setLeadContactKeys] = useState<string[]>([]);
   const [trainingen, setTrainingen] = useState<TrainingMoment[]>([]);
@@ -428,6 +431,14 @@ export function RecruitmentPanel() {
   const selected = useMemo(
     () => items.find((s) => s.id === selectedId) || null,
     [items, selectedId]
+  );
+
+  const selectedAfspraken = useMemo(
+    () =>
+      afspraken
+        .filter((a) => a.sollicitatie_id === selectedId)
+        .sort((a, b) => a.start_at.localeCompare(b.start_at)),
+    [afspraken, selectedId]
   );
 
   useEffect(() => {
@@ -767,6 +778,29 @@ export function RecruitmentPanel() {
     setDeleteOpen(true);
   }
 
+  async function removeAfspraakOnly() {
+    if (!afspraakRemove || removingAfspraak) return;
+    setRemovingAfspraak(true);
+    setError(null);
+    try {
+      const res = await fetch(
+        `/api/instroom/afspraken/${encodeURIComponent(afspraakRemove.id)}`,
+        { method: "DELETE" }
+      );
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error || "Afspraak verwijderen mislukt");
+      const goneId = afspraakRemove.id;
+      setAfspraken((list) => list.filter((a) => a.id !== goneId));
+      setAfspraakRemove(null);
+      setOkMsg("Afspraak uit de agenda gehaald. De sollicitant blijft staan.");
+      window.setTimeout(() => setOkMsg(null), 2800);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Afspraak verwijderen mislukt");
+    } finally {
+      setRemovingAfspraak(false);
+    }
+  }
+
   async function deleteSollicitant() {
     if (!selectedId || deleting) return;
     setDeleting(true);
@@ -1092,6 +1126,7 @@ export function RecruitmentPanel() {
             afspraken={afspraken}
             kandidaten={items}
             onOpenKandidaat={openDetail}
+            onRemoveAfspraak={setAfspraakRemove}
             onRefresh={loadAfspraken}
           />
         ) : view === "bellen" ? (
@@ -1459,6 +1494,39 @@ export function RecruitmentPanel() {
                   </Button>
                 </div>
 
+                {selectedAfspraken.length > 0 ? (
+                  <div className="rounded-lg border border-line">
+                    <p className="border-b border-line px-3 py-2 text-[11px] font-semibold uppercase tracking-wide text-muted">
+                      Afspraken
+                    </p>
+                    <ul className="divide-y divide-line">
+                      {selectedAfspraken.map((a) => (
+                        <li
+                          key={a.id}
+                          className="flex items-center justify-between gap-2 px-3 py-2"
+                        >
+                          <div className="min-w-0">
+                            <p className="truncate text-sm font-medium text-ink">
+                              {formatDateTimeNl(a.start_at)}
+                            </p>
+                            <p className="text-[11px] text-muted">
+                              {a.soort === "telefonisch" ? "Telefonisch" : "Fysiek"}
+                            </p>
+                          </div>
+                          <Button
+                            type="button"
+                            variant="outline"
+                            size="sm"
+                            onClick={() => setAfspraakRemove(a)}
+                          >
+                            Uit agenda
+                          </Button>
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                ) : null}
+
                 <div className="grid gap-4">
                   <div className="space-y-2">
                     <Label htmlFor="rc-naam" className="text-sm">
@@ -1632,6 +1700,51 @@ export function RecruitmentPanel() {
           ) : null}
         </SheetContent>
       </Sheet>
+
+      <AlertDialog
+        open={afspraakRemove != null}
+        onOpenChange={(open) => {
+          if (!open && !removingAfspraak) setAfspraakRemove(null);
+        }}
+      >
+        <AlertDialogContent size="default">
+          <AlertDialogHeader>
+            <AlertDialogTitle>Alleen deze afspraak weghalen?</AlertDialogTitle>
+            <AlertDialogDescription>
+              Het gesprek
+              {afspraakRemove
+                ? ` op ${formatDateTimeNl(afspraakRemove.start_at)}`
+                : ""}{" "}
+              van{" "}
+              <span className="font-semibold text-ink">
+                {afspraakRemove
+                  ? items.find((s) => s.id === afspraakRemove.sollicitatie_id)
+                      ?.naam ||
+                    afspraakRemove.sollicitaties?.naam ||
+                    "deze sollicitant"
+                  : "deze sollicitant"}
+              </span>{" "}
+              gaat uit de agenda. De sollicitant zelf blijft staan. Andere
+              afspraken van dezelfde persoon blijven ook staan.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={removingAfspraak}>
+              Annuleren
+            </AlertDialogCancel>
+            <AlertDialogAction
+              type="button"
+              disabled={removingAfspraak}
+              onClick={(e) => {
+                e.preventDefault();
+                void removeAfspraakOnly();
+              }}
+            >
+              {removingAfspraak ? "Bezig…" : "Alleen deze afspraak"}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
 
       <AlertDialog
         open={deleteOpen}

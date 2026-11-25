@@ -3,7 +3,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { formatInTimeZone, fromZonedTime } from "date-fns-tz";
 import { nl } from "date-fns/locale";
-import { CalendarDays, ChevronLeft, ChevronRight, Phone, MapPin } from "lucide-react";
+import { CalendarDays, ChevronLeft, ChevronRight, Phone, MapPin, X } from "lucide-react";
 import type { Adviseur, Sollicitatie, SollicitatieAfspraak } from "@/types/database";
 import { AMSTERDAM_TZ, formatTimeNl } from "@/lib/format";
 import {
@@ -115,11 +115,14 @@ export function RecruitmentAgendaView({
   afspraken,
   kandidaten = [],
   onOpenKandidaat,
+  onRemoveAfspraak,
   onRefresh,
 }: {
   afspraken: SollicitatieAfspraak[];
   kandidaten?: Sollicitatie[];
   onOpenKandidaat?: (id: string) => void;
+  /** Alleen dit gesprek uit de agenda. De sollicitant blijft staan. */
+  onRemoveAfspraak?: (afspraak: SollicitatieAfspraak) => void;
   onRefresh?: () => void;
 }) {
   const today = amsterdamYmd();
@@ -207,40 +210,55 @@ export function RecruitmentAgendaView({
     const wie = interviewerNaam(a, adviseurs);
     const fysiek = a.soort === "fysiek";
     return (
-      <button
+      <div
         key={a.id}
-        type="button"
-        onClick={() => onOpenKandidaat?.(a.sollicitatie_id)}
         className={cn(
-          "w-full rounded-md border px-2 py-1.5 text-left transition hover:border-green",
+          "relative rounded-md border transition hover:border-green",
           fysiek
             ? "border-green/30 bg-green-soft/60"
             : "border-line bg-white"
         )}
       >
-        <p className="truncate text-[12px] font-semibold text-ink">{naam}</p>
-        {!compact && functie ? (
-          <p className="truncate text-[11px] text-muted">{functie}</p>
-        ) : null}
-        <p className="mt-0.5 flex flex-wrap items-center gap-x-1.5 text-[10px] font-medium text-muted">
-          <span className="tabular-nums">{formatTimeNl(a.start_at)}</span>
-          <span aria-hidden>·</span>
-          <span className="inline-flex items-center gap-0.5">
-            {fysiek ? (
-              <MapPin className="size-2.5" aria-hidden />
-            ) : (
-              <Phone className="size-2.5" aria-hidden />
-            )}
-            {fysiek ? "Fysiek" : "Tel"}
-          </span>
-          {wie ? (
-            <>
-              <span aria-hidden>·</span>
-              <span>{wie}</span>
-            </>
+        <button
+          type="button"
+          onClick={() => onOpenKandidaat?.(a.sollicitatie_id)}
+          className="w-full px-2 py-1.5 pr-7 text-left"
+        >
+          <p className="truncate text-[12px] font-semibold text-ink">{naam}</p>
+          {!compact && functie ? (
+            <p className="truncate text-[11px] text-muted">{functie}</p>
           ) : null}
-        </p>
-      </button>
+          <p className="mt-0.5 flex flex-wrap items-center gap-x-1.5 text-[10px] font-medium text-muted">
+            <span className="tabular-nums">{formatTimeNl(a.start_at)}</span>
+            <span aria-hidden>·</span>
+            <span className="inline-flex items-center gap-0.5">
+              {fysiek ? (
+                <MapPin className="size-2.5" aria-hidden />
+              ) : (
+                <Phone className="size-2.5" aria-hidden />
+              )}
+              {fysiek ? "Fysiek" : "Tel"}
+            </span>
+            {wie ? (
+              <>
+                <span aria-hidden>·</span>
+                <span>{wie}</span>
+              </>
+            ) : null}
+          </p>
+        </button>
+        {onRemoveAfspraak ? (
+          <button
+            type="button"
+            title="Alleen deze afspraak uit de agenda"
+            aria-label={`Afspraak van ${naam} uit de agenda halen`}
+            onClick={() => onRemoveAfspraak(a)}
+            className="absolute right-0.5 top-0.5 inline-flex size-6 items-center justify-center rounded text-muted hover:bg-white hover:text-red-600"
+          >
+            <X className="size-3.5" aria-hidden />
+          </button>
+        ) : null}
+      </div>
     );
   }
 
