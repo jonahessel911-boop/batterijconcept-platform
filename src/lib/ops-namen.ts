@@ -24,6 +24,23 @@ export function isSharathBeller(a: { naam?: string | null }): boolean {
   return isSimonBeller(a);
 }
 
+/** Agenda-kolommen die Simon als beller mag zien. */
+export function isSimonAgendaAllowedAdviseur(a: {
+  naam?: string | null;
+}): boolean {
+  const n = String(a.naam || "")
+    .trim()
+    .toLowerCase()
+    .replace(/[-\s]+/g, " ");
+  if (n.includes("van noord") && (n.includes("jan") || n.includes("pieter"))) {
+    return true;
+  }
+  if (firstNameToken(n) === "peter" && n.includes("moelee")) {
+    return true;
+  }
+  return false;
+}
+
 /** Rik (voorheen Tarik): ops-manager / standaard backoffice. */
 export function isRikNaam(naam: string | null | undefined): boolean {
   const first = firstNameToken(naam);

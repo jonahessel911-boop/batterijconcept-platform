@@ -78,6 +78,10 @@ import {
   telefoonMatch,
   type GebruikerRol,
 } from "@/lib/rollen";
+import {
+  isSimonAgendaAllowedAdviseur,
+  isSimonBeller,
+} from "@/lib/ops-namen";
 import { CRM_TABS } from "./TabNav";
 import { PlanningAgenda } from "@/components/planning/PlanningAgenda";
 import { NettoBoord } from "./NettoBoord";
@@ -723,6 +727,16 @@ export function CrmShell() {
     // Admin / beller / backoffice: volle bellijst
     return leads;
   }, [leads, userRol, sessionUser]);
+
+  /** Simon (beller): alleen agenda van Peter Moelee + Jan Pieter van Noord. */
+  const simonAgendaAllowedIds = useMemo(() => {
+    if (!userRol || !sessionUser || !isBellerRol(userRol)) return undefined;
+    if (!isSimonBeller(sessionUser)) return undefined;
+    const ids = adviseurs
+      .filter((a) => isSimonAgendaAllowedAdviseur(a))
+      .map((a) => a.id);
+    return ids.length ? ids : undefined;
+  }, [userRol, sessionUser, adviseurs]);
 
   const scopedLeadIds = useMemo(
     () => new Set(scopedLeads.map((l) => l.id)),
@@ -1909,7 +1923,11 @@ export function CrmShell() {
                         </div>
                       )}
                       <AgendaPanel
-                        key={adviseurFilter || "all"}
+                        key={
+                          simonAgendaAllowedIds?.join(",") ||
+                          adviseurFilter ||
+                          "all"
+                        }
                         leads={scopedLeads}
                         afspraken={afspraken}
                         adviseurs={adviseurs}
@@ -1918,6 +1936,7 @@ export function CrmShell() {
                             ? sessionUser?.id
                             : adviseurFilter || undefined
                         }
+                        allowedAdviseurIds={simonAgendaAllowedIds}
                         onStatusChange={updateLeadStatus}
                         onBellerChange={
                           userRol === "admin" ? updateLeadBeller : undefined

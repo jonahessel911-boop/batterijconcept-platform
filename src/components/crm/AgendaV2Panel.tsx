@@ -445,6 +445,8 @@ export function AgendaPanel({
   leads,
   afspraken: afsprakenProp,
   defaultAdviseurId,
+  /** Beperk kolommen tot deze adviseur-ids (bijv. Simon → Peter + Jan Pieter). */
+  allowedAdviseurIds,
   adviseurs: adviseursProp = [],
   onStatusChange,
   onBellerChange,
@@ -456,6 +458,7 @@ export function AgendaPanel({
   leads: Lead[];
   afspraken?: Afspraak[];
   defaultAdviseurId?: string;
+  allowedAdviseurIds?: string[];
   adviseurs?: Adviseur[];
   onStatusChange?: (leadId: string, status: LeadStatus) => void;
   onBellerChange?: (leadId: string, bellerId: string | null) => void;
@@ -489,6 +492,8 @@ export function AgendaPanel({
   const [isNarrow, setIsNarrow] = useState(false);
   const [mobileAdviseurId, setMobileAdviseurId] = useState<string | null>(null);
   const [hiddenIds, setHiddenIds] = useState<Set<string>>(new Set());
+  /** Inactieve adviseurs die al een default-hide hebben gekregen (niet opnieuw forceren). */
+  const inactiveHideSeeded = useRef<Set<string>>(new Set());
   const [nietGelopenCounts, setNietGelopenCounts] = useState<
     Record<string, number>
   >({});
@@ -556,29 +561,86 @@ export function AgendaPanel({
   const weekInfo = useMemo(() => schouwWeekFromDate(weekAnchor), [weekAnchor]);
   const weekJumpOptions = useMemo(() => agendaWeekJumpOptions(8, 40), []);
 
+  const restrictAdviseurIds = useMemo(() => {
+    if (!allowedAdviseurIds?.length) return null;
+    return new Set(allowedAdviseurIds);
+  }, [allowedAdviseurIds]);
+
   // Alle sales-kolommen (ook inactief) — voor afblokken / eigen rooster.
+  // Bij allowedAdviseurIds: alleen die ids (ook als inactief/geblokkeerd).
   const planAdviseurs = useMemo(
     () =>
       adviseurs
-        .filter((a) => !isAdminAdviseur(a) && isAgendaAdviseur(a))
+        .filter((a) => {
+          if (restrictAdviseurIds) return restrictAdviseurIds.has(a.id);
+          return !isAdminAdviseur(a) && isAgendaAdviseur(a);
+        })
         .sort((a, b) => {
           const aSpare = isSpareAdviseur(a) ? 1 : 0;
           const bSpare = isSpareAdviseur(b) ? 1 : 0;
           if (aSpare !== bSpare) return aSpare - bSpare;
           return a.naam.localeCompare(b.naam, "nl");
         }),
-    [adviseurs]
+    [adviseurs, restrictAdviseurIds]
   );
 
   /** Teamweek: alleen inplanbaar (actief in planning, niet geblokkeerd, week open). */
   const weekPlanbareAdviseurs = useMemo(() => {
     const wk = `${weekInfo.jaar}-W${String(weekInfo.week).padStart(2, "0")}`;
     return planAdviseurs.filter((a) => {
+      // Restricted view (Simon): toon allowlist ook als niet-planbaar
+      if (restrictAdviseurIds) return true;
       if (!isPlanbaarAdviseur(a)) return false;
       if (beschikbaarMap.get(`${a.id}:${wk}`) === false) return false;
       return true;
     });
-  }, [planAdviseurs, beschikbaarMap, weekInfo.jaar, weekInfo.week]);
+  }, [
+    planAdviseurs,
+    beschikbaarMap,
+    weekInfo.jaar,
+    weekInfo.week,
+    restrictAdviseurIds,
+  ]);
+
+  /** Inactieve sales-adviseurs (nog wel in agenda te tonen via filter). */
+  const inactiveAgendaAdviseurs = useMemo(
+    () =>
+      restrictAdviseurIds
+        ? []
+        : planAdviseurs.filter((a) => a.actief === false),
+    [planAdviseurs, restrictAdviseurIds]
+  );
+
+  /**
+   * Adviseurs-menu: planbare + inactieve (standaard uit, handmatig aan).
+   */
+  const menuAdviseurs = useMemo(() => {
+    const byId = new Map<string, Adviseur>();
+    for (const a of weekPlanbareAdviseurs) byId.set(a.id, a);
+    for (const a of inactiveAgendaAdviseurs) byId.set(a.id, a);
+    return [...byId.values()].sort((a, b) => {
+      const aInact = a.actief === false ? 1 : 0;
+      const bInact = b.actief === false ? 1 : 0;
+      if (aInact !== bInact) return aInact - bInact;
+      return a.naam.localeCompare(b.naam, "nl");
+    });
+  }, [weekPlanbareAdviseurs, inactiveAgendaAdviseurs]);
+
+  // Inactief standaard verborgen; gebruiker kan ze later aanzetten.
+  // Restricted allowlist (Simon): niet auto-verbergen.
+  useEffect(() => {
+    if (defaultAdviseurId || restrictAdviseurIds) return;
+    const fresh = inactiveAgendaAdviseurs
+      .map((a) => a.id)
+      .filter((id) => !inactiveHideSeeded.current.has(id));
+    if (fresh.length === 0) return;
+    for (const id of fresh) inactiveHideSeeded.current.add(id);
+    setHiddenIds((prev) => {
+      const next = new Set(prev);
+      for (const id of fresh) next.add(id);
+      return next;
+    });
+  }, [inactiveAgendaAdviseurs, defaultAdviseurId, restrictAdviseurIds]);
 
   const visibleAdviseurs = useMemo(() => {
     if (defaultAdviseurId) {
@@ -586,12 +648,22 @@ export function AgendaPanel({
         (a) => a.id === defaultAdviseurId && !hiddenIds.has(a.id)
       );
     }
-    return weekPlanbareAdviseurs.filter((a) => !hiddenIds.has(a.id));
+    if (restrictAdviseurIds) {
+      return planAdviseurs.filter((a) => !hiddenIds.has(a.id));
+    }
+    const planbareIds = new Set(weekPlanbareAdviseurs.map((a) => a.id));
+    return planAdviseurs.filter((a) => {
+      if (hiddenIds.has(a.id)) return false;
+      if (planbareIds.has(a.id)) return true;
+      // Inactief alleen als gebruiker ze aanzet (niet in hiddenIds)
+      return a.actief === false;
+    });
   }, [
     planAdviseurs,
     weekPlanbareAdviseurs,
     defaultAdviseurId,
     hiddenIds,
+    restrictAdviseurIds,
   ]);
 
   // Mobiel: één adviseur in het grid (swipe Agenda↔Leads uit; chips om te wisselen)
@@ -630,7 +702,17 @@ export function AgendaPanel({
         !isPlanbaarAdviseur(adv) ||
         beschikbaarMap.get(weekKey) === false
       ) {
-        gepland.set(adv.id, 0);
+        // Inactief / niet-planbaar: tel bestaande afspraken in deze week wél
+        let geplandN = 0;
+        const dayKeys = new Set(days.map((d) => d.key));
+        for (const a of afspraken) {
+          if (a.adviseur_id !== adv.id) continue;
+          if (a.status === "geannuleerd") continue;
+          if (!afspraakZichtbaarInAgenda(a, afspraken)) continue;
+          if (!dayKeys.has(dayKeyAmsterdam(a.start_at))) continue;
+          geplandN += 1;
+        }
+        gepland.set(adv.id, geplandN);
         beschikbaar.set(adv.id, 0);
         vrij.set(adv.id, 0);
         continue;
@@ -689,13 +771,25 @@ export function AgendaPanel({
   const afsprakenCountByAdviseur = slotStatsByAdviseur.gepland;
   const beschikbaarSlotsByAdviseur = slotStatsByAdviseur.beschikbaar;
 
-  /** Geen kolom als deze week 0 boekbare slots heeft. */
+  /**
+   * Geen kolom als deze week 0 boekbare slots heeft —
+   * behalve inactieve die de gebruiker aanzet (historische afspraken),
+   * of restricted allowlist (altijd tonen).
+   */
   const kolomAdviseurs = useMemo(() => {
     if (defaultAdviseurId) return visibleAdviseurs;
-    return visibleAdviseurs.filter(
-      (a) => (slotStatsByAdviseur.beschikbaar.get(a.id) || 0) > 0
-    );
-  }, [visibleAdviseurs, defaultAdviseurId, slotStatsByAdviseur]);
+    if (restrictAdviseurIds) return visibleAdviseurs;
+    return visibleAdviseurs.filter((a) => {
+      if ((slotStatsByAdviseur.beschikbaar.get(a.id) || 0) > 0) return true;
+      if (a.actief === false) return true;
+      return false;
+    });
+  }, [
+    visibleAdviseurs,
+    defaultAdviseurId,
+    slotStatsByAdviseur,
+    restrictAdviseurIds,
+  ]);
 
   const displayAdviseurs = useMemo(() => {
     if (!isNarrow || defaultAdviseurId || kolomAdviseurs.length <= 1) {
@@ -1320,7 +1414,7 @@ export function AgendaPanel({
   const adviseurNamen = displayAdviseurs.map((a) => a.naam);
   const hiddenCount = defaultAdviseurId
     ? 0
-    : weekPlanbareAdviseurs.length - kolomAdviseurs.length;
+    : menuAdviseurs.filter((a) => hiddenIds.has(a.id)).length;
   const showMobileAdviseurPicker =
     isNarrow && !defaultAdviseurId && kolomAdviseurs.length > 1;
 
@@ -1608,16 +1702,17 @@ export function AgendaPanel({
                         className="flex-1 rounded border border-line px-2 py-1 text-[11px] font-semibold hover:bg-wash"
                         onClick={() =>
                           setHiddenIds(
-                            new Set(weekPlanbareAdviseurs.map((a) => a.id))
+                            new Set(menuAdviseurs.map((a) => a.id))
                           )
                         }
                       >
                         Geen
                       </button>
                     </div>
-                    {weekPlanbareAdviseurs
+                    {menuAdviseurs
                       .filter(
                         (a) =>
+                          a.actief === false ||
                           (slotStatsByAdviseur.beschikbaar.get(a.id) || 0) > 0
                       )
                       .map((a) => {
@@ -1650,7 +1745,9 @@ export function AgendaPanel({
                                 : ""}
                           </span>
                           <span className="shrink-0 tabular-nums text-[10px] text-muted">
-                            {gepland}/{totaal}
+                            {a.actief === false
+                              ? `${gepland}`
+                              : `${gepland}/${totaal}`}
                           </span>
                         </label>
                       );
@@ -1716,7 +1813,7 @@ export function AgendaPanel({
                   className="font-semibold text-green underline"
                   onClick={() => setHiddenIds(new Set())}
                 >
-                  Toon alle {weekPlanbareAdviseurs.length}
+                  Toon alle {menuAdviseurs.length}
                 </button>
               </>
             ) : null}
