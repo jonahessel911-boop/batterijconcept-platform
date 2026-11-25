@@ -13,7 +13,6 @@ import {
   Check,
   ChevronDown,
   Columns3,
-  FileText,
   List,
   MessageCircle,
   Phone,
@@ -30,7 +29,6 @@ import {
 import { adresRegel, formatDateTimeNl, formatEuro, formatTimeNl } from "@/lib/format";
 import { WarmtefondsAfspraakForm } from "@/components/warmtefonds/WarmtefondsAfspraakForm";
 import { WarmtefondsContactMail } from "@/components/warmtefonds/WarmtefondsContactMail";
-import { WarmtefondsCreditfacturen } from "@/components/warmtefonds/WarmtefondsCreditfacturen";
 import { cn } from "@/lib/utils";
 import {
   patchVoorWerkStatus,
@@ -259,7 +257,7 @@ function AanbetalingRegel({
   );
 }
 
-type TabId = "aanvragen" | "agenda" | "creditfacturen" | "account";
+type TabId = "aanvragen" | "agenda" | "account";
 
 function portalBadgeFor(order: {
   financiering_status?: string | null;
@@ -1156,15 +1154,6 @@ export function WarmtefondsPortalPage() {
           <p className="border border-line bg-white px-5 py-14 text-center text-sm text-muted">
             Laden…
           </p>
-        ) : tab === "creditfacturen" ? (
-          <>
-            <div className="mb-3">
-              <h1 className="font-display text-[28px] font-bold leading-none text-ink">
-                Creditfacturen
-              </h1>
-            </div>
-            <WarmtefondsCreditfacturen token={token} />
-          </>
         ) : tab === "agenda" ? (
           <>
             <div className="mb-4 flex flex-wrap items-end justify-between gap-3">
@@ -1528,16 +1517,11 @@ export function WarmtefondsPortalPage() {
         className="fixed inset-x-0 bottom-0 z-40 border-t border-line bg-white pb-[env(safe-area-inset-bottom)]"
         aria-label="Hoofdnavigatie"
       >
-        <div className="grid h-[3.75rem] grid-cols-4">
+        <div className="grid h-[3.75rem] grid-cols-3">
           {(
             [
               { id: "aanvragen" as const, label: "Aanvragen", Icon: Columns3 },
               { id: "agenda" as const, label: "Agenda", Icon: Calendar },
-              {
-                id: "creditfacturen" as const,
-                label: "Creditfacturen",
-                Icon: FileText,
-              },
               { id: "account" as const, label: "Account", Icon: User },
             ] as const
           ).map(({ id, label, Icon }) => {
