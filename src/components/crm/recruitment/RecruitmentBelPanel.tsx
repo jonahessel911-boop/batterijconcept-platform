@@ -2,7 +2,12 @@
 
 import { useEffect, useMemo, useState } from "react";
 import type { Sollicitatie, SollicitatieAfspraak } from "@/types/database";
-import { formatDateTimeNl } from "@/lib/format";
+import { fromZonedTime, formatInTimeZone } from "date-fns-tz";
+import {
+  AMSTERDAM_TZ,
+  formatDateTimeNl,
+  formatTimeNl,
+} from "@/lib/format";
 import {
   normalizeSollicitatieStatus,
   SOLLICITATIE_STATUS_LABEL,
@@ -12,6 +17,8 @@ import {
   blockedSollicitatieContactKeys,
   mergeBlockedContactKeys,
   buildSollicitatieGeenContactPatch,
+  isSollicitatieTerugbelDue,
+  listSollicitatieTerugbels,
   sollicitatieBelpogingenOf,
   sollicitatieGeenContactLabel,
   sortSollicitatieBelQueue,
@@ -77,6 +84,22 @@ function adresOf(s: Sollicitatie) {
   );
 }
 
+function defaultTerugbelLocal(): string {
+  const now = new Date();
+  const inHalfUur = new Date(now.getTime() + 30 * 60 * 1000);
+  const stamp = formatInTimeZone(
+    inHalfUur,
+    AMSTERDAM_TZ,
+    "yyyy-MM-dd'T'HH:mm"
+  );
+  return stamp;
+}
+
+function datetimeLocalToIso(value: string): string {
+  const stamp = value.length === 16 ? `${value}:00` : value;
+  return fromZonedTime(stamp, AMSTERDAM_TZ).toISOString();
+}
+
 function adresRegel(s: Sollicitatie) {
   const a = adresOf(s);
   const straat = [a.straat, a.huisnummer, a.toevoeging]
@@ -125,8 +148,21 @@ export function RecruitmentBelPanel({
       (k) => !skippedIds.has(k.id)
     );
   }, [kandidaten, alleKandidaten, afspraken, leadContactKeys, skippedIds]);
+  const terugbels = useMemo(
+    () =>
+      listSollicitatieTerugbels(
+        alleKandidaten && alleKandidaten.length > 0
+          ? alleKandidaten
+          : kandidaten
+      ),
+    [kandidaten, alleKandidaten]
+  );
   const [busy, setBusy] = useState(false);
-  const [nextMode, setNextMode] = useState(false);
+  const [nextMode, setNextMode] = useState<false | "status" | "terugbel">(
+    false
+  );
+  const [terugbelAt, setTerugbelAt] = useState("");
+  const [terugbelNotitie, setTerugbelNotitie] = useState("");
   const [copied, setCopied] = useState(false);
   const [msg, setMsg] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -161,6 +197,7 @@ export function RecruitmentBelPanel({
   function resetQueueUi() {
     setNextMode(false);
     setNoteDraft("");
+    setTerugbelNotitie("");
     setError(null);
   }
 
@@ -367,9 +404,85 @@ export function RecruitmentBelPanel({
     }
   }
 
+  async function planTerugbel(e: React.FormEvent) {
+    e.preventDefault();
+    if (!current || busy) return;
+    if (!terugbelAt) {
+      setError("Kies datum en tijd");
+      return;
+    }
+    setBusy(true);
+    setError(null);
+    try {
+      const iso = datetimeLocalToIso(terugbelAt);
+      const note = terugbelNotitie.trim();
+      const res = await fetch(`/api/instroom/${current.id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          status: "terugbelafspraak",
+          terugbel_at: iso,
+          terugbel_notitie: note || null,
+          laatst_gebeld_at: new Date().toISOString(),
+          notitie_append: note
+            ? `Terugbelafspraak ${terugbelAt.replace("T", " ")} — ${note}`
+            : `Terugbelafspraak ${terugbelAt.replace("T", " ")}`,
+        }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error || "Opslaan mislukt");
+      onKandidaatUpdated(data.sollicitatie as Sollicitatie);
+      setMsg("Terugbelafspraak gezet — staat bovenaan tot je belt");
+      window.setTimeout(() => setMsg(null), 3200);
+      goNewest();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Mislukt");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  const terugbelBanner =
+    terugbels.length > 0 ? (
+      <div className="border-b border-[#C45A12]/25 bg-[#FFF8F3] px-4 py-2.5 sm:px-5">
+        <p className="text-[10px] font-semibold uppercase tracking-wide text-[#C45A12]">
+          Terugbellen ({terugbels.length}) — klik naar kandidaat
+        </p>
+        <div className="mt-1.5 flex flex-wrap gap-1.5">
+          {terugbels.map((s) => {
+            const due = isSollicitatieTerugbelDue(s);
+            return (
+              <button
+                key={s.id}
+                type="button"
+                onClick={() => onOpenKandidaat?.(s.id)}
+                className={[
+                  "inline-flex max-w-full items-center gap-2 border px-2.5 py-1 text-left text-xs transition",
+                  due
+                    ? "border-[#C45A12]/35 bg-white text-ink hover:border-[#C45A12]"
+                    : "border-line bg-white text-muted hover:border-[#C45A12]/40 hover:text-ink",
+                ].join(" ")}
+              >
+                <span
+                  className={[
+                    "shrink-0 font-bold tabular-nums",
+                    due ? "text-[#C45A12]" : "text-muted",
+                  ].join(" ")}
+                >
+                  {s.terugbel_at ? formatTimeNl(s.terugbel_at) : "—"}
+                </span>
+                <span className="truncate font-medium">{s.naam}</span>
+              </button>
+            );
+          })}
+        </div>
+      </div>
+    ) : null;
+
   if (!current) {
     return (
       <div className="flex min-h-0 flex-1 flex-col">
+        {terugbelBanner}
         <div className="border-b border-line bg-[#F7FBF8] px-4 py-2 sm:px-5">
           <p className="text-xs text-muted">
             <span className="font-semibold text-ink">Recruitment bellen</span>
@@ -378,8 +491,8 @@ export function RecruitmentBelPanel({
         </div>
         <p className="px-4 py-16 text-center text-sm text-muted sm:px-6">
           Niemand om te bellen (Nieuw / Geen contact met telefoonnummer).
-          Kandidaten met een gesprekafspraak en terugbelafspraken staan niet
-          in deze lijst.
+          Openstaande terugbelafspraken staan hierboven — klik om naar de
+          kandidaat te gaan.
         </p>
       </div>
     );
@@ -387,6 +500,7 @@ export function RecruitmentBelPanel({
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">
+      {terugbelBanner}
       <div className="flex flex-wrap items-center justify-between gap-2 border-b border-line bg-[#F7FBF8] px-4 py-2 sm:px-5">
         <p className="text-xs text-muted">
           <span className="font-semibold text-ink">Recruitment bellen</span>
@@ -410,8 +524,8 @@ export function RecruitmentBelPanel({
         </div>
       )}
 
-      <div className="grid min-h-0 flex-1 overflow-hidden lg:grid-cols-[minmax(0,1fr)_minmax(340px,420px)]">
-        <section className="flex min-h-0 flex-col border-b border-line lg:border-b-0 lg:border-r">
+      <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden lg:grid lg:grid-cols-[minmax(0,1fr)_minmax(340px,420px)]">
+        <section className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden lg:border-r">
           <div className="min-h-0 flex-1 overflow-y-auto p-4 sm:p-6">
             <p className="text-[11px] font-semibold uppercase tracking-wide text-muted">
               {position > 0 ? position : "—"} van {queue.length} in de bellijst
@@ -596,21 +710,21 @@ export function RecruitmentBelPanel({
           </div>
         </section>
 
-        <aside className="flex min-h-0 flex-col overflow-y-auto bg-wash/40 p-4 sm:p-5">
+        <aside className="flex max-h-[48vh] shrink-0 flex-col overflow-y-auto border-t border-line bg-white p-3 pb-[max(0.75rem,env(safe-area-inset-bottom))] sm:p-5 lg:max-h-none lg:border-t-0 lg:bg-wash/40">
           <div className="lg:sticky lg:top-0">
             {!nextMode ? (
               <button
                 type="button"
                 disabled={busy}
                 onClick={() => {
-                  setNextMode(true);
+                  setNextMode("status");
                   setError(null);
                 }}
                 className="flex min-h-12 w-full items-center justify-center bg-orange px-4 text-sm font-semibold text-white hover:bg-[#e0651c] disabled:opacity-60 sm:min-h-14 sm:text-base"
               >
                 Volgende
               </button>
-            ) : (
+            ) : nextMode === "status" ? (
               <div className="space-y-2 rounded-2xl border border-line bg-white p-4">
                 <p className="text-sm font-semibold text-ink">Kies de status</p>
                 <p className="text-xs text-muted">
@@ -650,6 +764,19 @@ export function RecruitmentBelPanel({
                 <button
                   type="button"
                   disabled={busy}
+                  onClick={() => {
+                    setTerugbelAt(defaultTerugbelLocal());
+                    setTerugbelNotitie("");
+                    setNextMode("terugbel");
+                    setError(null);
+                  }}
+                  className="flex min-h-12 w-full items-center justify-center border border-[#C45A12]/40 bg-[#FFF0E6] px-4 text-sm font-semibold text-[#C45A12] hover:bg-[#FFE4D4] disabled:opacity-60"
+                >
+                  Terugbel afspraak
+                </button>
+                <button
+                  type="button"
+                  disabled={busy}
                   onClick={() => void markDiskwalificatie()}
                   className="flex min-h-11 w-full items-center justify-center border border-line px-4 text-sm font-semibold text-ink hover:bg-wash disabled:opacity-60"
                 >
@@ -672,6 +799,55 @@ export function RecruitmentBelPanel({
                   Terug
                 </button>
               </div>
+            ) : (
+              <form
+                onSubmit={(e) => void planTerugbel(e)}
+                className="space-y-3 rounded-2xl border border-line bg-white p-4"
+              >
+                <p className="text-sm font-semibold text-ink">
+                  Terugbel afspraak
+                </p>
+                <p className="text-xs text-muted">
+                  Kandidaat verdwijnt uit de wachtrij. Vanaf het geplande
+                  moment staat er bovenaan een chip — klik om naar de
+                  kandidaat te gaan.
+                </p>
+                <label className="block text-xs font-semibold uppercase tracking-wide text-muted">
+                  Datum &amp; tijd
+                  <input
+                    type="datetime-local"
+                    required
+                    value={terugbelAt}
+                    onChange={(e) => setTerugbelAt(e.target.value)}
+                    className="mt-1 w-full border border-line bg-white px-3 py-2.5 text-sm text-ink outline-none focus:border-green"
+                  />
+                </label>
+                <label className="block text-xs font-semibold uppercase tracking-wide text-muted">
+                  Notitie
+                  <textarea
+                    value={terugbelNotitie}
+                    onChange={(e) => setTerugbelNotitie(e.target.value)}
+                    rows={3}
+                    placeholder="Bijv. bel terug na 17:00, vraagt om meer info…"
+                    className="mt-1 w-full border border-line bg-white px-3 py-2 text-sm text-ink outline-none focus:border-green"
+                  />
+                </label>
+                <button
+                  type="submit"
+                  disabled={busy || !terugbelAt}
+                  className="flex min-h-12 w-full items-center justify-center bg-[#C45A12] px-4 text-sm font-semibold text-white hover:bg-[#a84a0e] disabled:opacity-60"
+                >
+                  {busy ? "Bezig…" : "Terugbel afspraak opslaan"}
+                </button>
+                <button
+                  type="button"
+                  disabled={busy}
+                  onClick={() => setNextMode("status")}
+                  className="flex min-h-10 w-full items-center justify-center text-sm font-medium text-muted hover:text-ink"
+                >
+                  Terug
+                </button>
+              </form>
             )}
           </div>
         </aside>

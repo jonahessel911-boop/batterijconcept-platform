@@ -1975,15 +1975,15 @@ export function CrmShell() {
                   ))}
                 {tab === "instroom" && (
                   <div className="flex min-h-0 min-w-0 flex-1 flex-col">
-                    <div className="shrink-0 border-b border-line px-4 py-3 sm:px-5">
-                      <h1 className="font-display text-[1.4rem] font-semibold tracking-tight text-green-deeper sm:text-[1.75rem]">
+                    <div className="shrink-0 border-b border-line px-3 py-2 sm:px-5 sm:py-3">
+                      <h1 className="font-display text-lg font-semibold tracking-tight text-green-deeper sm:text-[1.75rem]">
                         {titles.instroom.title}
                       </h1>
-                      <p className="mt-0.5 text-sm text-muted">
+                      <p className="mt-0.5 hidden text-sm text-muted sm:block">
                         {titles.instroom.sub}
                       </p>
                     </div>
-                    <div className="min-h-0 flex-1">
+                    <div className="min-h-0 min-w-0 flex-1">
                       <RecruitmentPanel />
                     </div>
                   </div>

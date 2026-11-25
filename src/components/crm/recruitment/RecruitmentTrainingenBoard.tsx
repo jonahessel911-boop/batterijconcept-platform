@@ -295,11 +295,11 @@ export function RecruitmentTrainingenBoard({
         </div>
       </div>
 
-      <div className="grid min-h-0 flex-1 lg:grid-cols-[18rem_minmax(0,1fr)]">
+      <div className="grid min-h-0 min-w-0 flex-1 lg:grid-cols-[18rem_minmax(0,1fr)]">
         {/* Pool — ook dropzone om training te annuleren */}
         <aside
           className={cn(
-            "flex min-h-0 flex-col border-b border-line transition lg:border-b-0 lg:border-r",
+            "flex max-h-[40vh] min-h-0 flex-col border-b border-line transition lg:max-h-none lg:border-b-0 lg:border-r",
             overPool && draggingFromTraining && "bg-green-soft/25"
           )}
           onDragOver={(e: DragEvent) => {

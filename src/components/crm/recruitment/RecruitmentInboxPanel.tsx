@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import {
+  ArrowLeft,
   ArrowUpRight,
   Mail,
   RefreshCw,
@@ -498,7 +499,7 @@ export function RecruitmentInboxPanel({
             }}
           >
             <Reply className="size-3.5" />
-            Beantwoorden
+            <span className="hidden sm:inline">Beantwoorden</span>
           </Button>
           <Button
             type="button"
@@ -509,7 +510,9 @@ export function RecruitmentInboxPanel({
             onClick={() => void sync()}
           >
             <RefreshCw className={cn("size-3.5", syncing && "animate-spin")} />
-            {syncing ? "Sync…" : "Vernieuwen"}
+            <span className="hidden sm:inline">
+              {syncing ? "Sync…" : "Vernieuwen"}
+            </span>
           </Button>
         </div>
       </div>
@@ -534,8 +537,13 @@ export function RecruitmentInboxPanel({
         </div>
       ) : null}
 
-      <div className="grid min-h-0 flex-1 lg:grid-cols-[minmax(17rem,22rem)_minmax(0,1fr)]">
-        <aside className="flex min-h-0 flex-col border-b border-black/10 bg-white lg:border-b-0 lg:border-r">
+      <div className="grid min-h-0 min-w-0 flex-1 lg:grid-cols-[minmax(17rem,22rem)_minmax(0,1fr)]">
+        <aside
+          className={cn(
+            "flex min-h-0 flex-col border-b border-black/10 bg-white lg:border-b-0 lg:border-r",
+            selected ? "hidden lg:flex" : "flex"
+          )}
+        >
           <div className="shrink-0 border-b border-black/5 px-3 py-2">
             <div className="relative">
               <Search className="pointer-events-none absolute top-1/2 left-2.5 size-3.5 -translate-y-1/2 text-[#8E8E93]" />
@@ -651,7 +659,12 @@ export function RecruitmentInboxPanel({
           </div>
         </aside>
 
-        <section className="flex min-h-0 flex-col bg-white">
+        <section
+          className={cn(
+            "min-h-0 min-w-0 flex-col bg-white",
+            selected ? "flex" : "hidden lg:flex"
+          )}
+        >
           {!selected ? (
             <div className="flex flex-1 flex-col items-center justify-center gap-2 text-[#8E8E93]">
               <Mail className="size-10 opacity-40" />
@@ -659,8 +672,16 @@ export function RecruitmentInboxPanel({
             </div>
           ) : (
             <>
-              <div className="shrink-0 border-b border-black/5 px-5 py-4">
-                <h2 className="font-display text-[22px] font-semibold tracking-tight text-[#1D1D1F]">
+              <div className="shrink-0 border-b border-black/5 px-3 py-3 sm:px-5 sm:py-4">
+                <button
+                  type="button"
+                  onClick={() => setSelectedKey(null)}
+                  className="mb-2 inline-flex items-center gap-1 text-[13px] font-semibold text-[#007AFF] lg:hidden"
+                >
+                  <ArrowLeft className="size-3.5" />
+                  Inbox
+                </button>
+                <h2 className="font-display text-lg font-semibold tracking-tight text-[#1D1D1F] sm:text-[22px]">
                   {selected.subject || "(geen onderwerp)"}
                 </h2>
                 <p className="mt-1 text-[12px] text-[#8E8E93]">

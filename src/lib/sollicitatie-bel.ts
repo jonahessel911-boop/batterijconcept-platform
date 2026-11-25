@@ -121,6 +121,25 @@ export function isSollicitatieTerugbelDue(
   return at.getTime() <= now.getTime();
 }
 
+/** Openstaande recruitment-terugbels, due eerst. */
+export function listSollicitatieTerugbels(
+  list: Sollicitatie[],
+  now = new Date()
+): Sollicitatie[] {
+  return [...list]
+    .filter(
+      (s) => normalizeSollicitatieStatus(s.status) === "terugbelafspraak"
+    )
+    .sort((a, b) => {
+      const dueA = isSollicitatieTerugbelDue(a, now) ? 0 : 1;
+      const dueB = isSollicitatieTerugbelDue(b, now) ? 0 : 1;
+      if (dueA !== dueB) return dueA - dueB;
+      const ta = sollicitatieTerugbelAt(a)?.getTime() ?? 0;
+      const tb = sollicitatieTerugbelAt(b)?.getTime() ?? 0;
+      return ta - tb;
+    });
+}
+
 /** In bel-queue: nieuw of geen_contact (< 3 pogingen). Geen terugbelafspraken. */
 export function isSollicitatieBelbaar(
   s: Sollicitatie,

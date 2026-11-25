@@ -127,6 +127,7 @@ export function RecruitmentAgendaView({
 }) {
   const today = amsterdamYmd();
   const [weekStart, setWeekStart] = useState(() => mondayOfWeek(today));
+  const [mobileDay, setMobileDay] = useState(today);
   const [adviseurs, setAdviseurs] = useState<Adviseur[]>([]);
 
   useEffect(() => {
@@ -159,6 +160,11 @@ export function RecruitmentAgendaView({
     () => Array.from({ length: 5 }, (_, i) => addDaysYmd(weekStart, i)),
     [weekStart]
   );
+
+  useEffect(() => {
+    if (days.includes(today)) setMobileDay(today);
+    else setMobileDay(days[0]!);
+  }, [weekStart, days, today]);
 
   const byId = useMemo(() => {
     const map = new Map<string, Sollicitatie>();
@@ -264,7 +270,7 @@ export function RecruitmentAgendaView({
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">
-      <div className="flex shrink-0 flex-wrap items-center justify-between gap-3 border-b border-line px-3 py-2.5 sm:px-4">
+      <div className="flex shrink-0 flex-col gap-2 border-b border-line px-3 py-2.5 sm:flex-row sm:flex-wrap sm:items-center sm:justify-between sm:gap-3 sm:px-4">
         <div>
           <p className="text-sm font-semibold text-ink">Gespreksagenda</p>
           <p className="text-[12px] text-muted">
@@ -303,7 +309,52 @@ export function RecruitmentAgendaView({
       </div>
 
       <div className="min-h-0 flex-1 overflow-auto">
-        <div className="min-w-[720px] px-3 py-3 sm:px-4">
+        <div className="px-3 py-3 md:hidden">
+          <div className="flex gap-1.5 overflow-x-auto pb-1">
+            {days.map((ymd) => {
+              const h = dayHeader(ymd);
+              const n = countsByDay.get(ymd) || 0;
+              const active = ymd === mobileDay;
+              return (
+                <button
+                  key={ymd}
+                  type="button"
+                  onClick={() => setMobileDay(ymd)}
+                  className={cn(
+                    "flex min-w-[4.4rem] shrink-0 flex-col items-center rounded-lg border px-2 py-1.5 text-center",
+                    active
+                      ? "border-green bg-green text-white"
+                      : ymd === today
+                        ? "border-green/40 bg-green-soft text-ink"
+                        : "border-line bg-white text-ink"
+                  )}
+                >
+                  <span className="text-[10px] font-semibold uppercase tracking-wide opacity-80">
+                    {h.weekday}
+                  </span>
+                  <span className="text-[12px] font-semibold">{h.date}</span>
+                  <span className="text-[10px] tabular-nums opacity-80">
+                    {n}
+                  </span>
+                </button>
+              );
+            })}
+          </div>
+          <ul className="mt-3 space-y-2">
+            {weekAfspraken
+              .filter((a) => ymdOf(a.start_at) === mobileDay)
+              .map((a) => (
+                <li key={a.id}>{renderCard(a, false)}</li>
+              ))}
+            {weekAfspraken.filter((a) => ymdOf(a.start_at) === mobileDay)
+              .length === 0 ? (
+              <li className="rounded-lg border border-dashed border-line px-3 py-8 text-center text-sm text-muted">
+                Geen gesprekken op deze dag
+              </li>
+            ) : null}
+          </ul>
+        </div>
+        <div className="hidden min-w-[720px] px-3 py-3 md:block sm:px-4">
           <div
             className="grid border-b border-line pb-2"
             style={{ gridTemplateColumns: "3.5rem repeat(5, minmax(0, 1fr))" }}

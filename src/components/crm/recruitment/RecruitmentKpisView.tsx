@@ -345,14 +345,14 @@ export function RecruitmentKpisView() {
             {RECRUITMENT_KPI_DEFAULTS.cphLookbackDays} dagen.
           </CardDescription>
         </CardHeader>
-        <CardContent className="flex flex-wrap items-end gap-3 px-4 pb-4 sm:px-5">
-          <div className="space-y-1.5">
+        <CardContent className="flex flex-col items-stretch gap-3 px-4 pb-4 sm:flex-row sm:flex-wrap sm:items-end sm:px-5">
+          <div className="w-full space-y-1.5 sm:w-auto">
             <Label htmlFor="kpi-cph">Doel CPH adviseur (€)</Label>
             <Input
               id="kpi-cph"
               type="number"
               min={1}
-              className="w-36"
+              className="w-full sm:w-36"
               value={targetCph}
               onChange={(e) => setTargetCph(Number(e.target.value) || 1)}
             />
@@ -363,7 +363,7 @@ export function RecruitmentKpisView() {
               id="kpi-target"
               type="number"
               min={1}
-              className="w-32"
+              className="w-full sm:w-32"
               value={targetSales}
               onChange={(e) => setTargetSales(Number(e.target.value) || 1)}
             />
@@ -374,7 +374,7 @@ export function RecruitmentKpisView() {
               id="kpi-setter"
               type="number"
               min={1}
-              className="w-40"
+              className="w-full sm:w-40"
               value={setterCalls}
               onChange={(e) => setSetterCalls(Number(e.target.value) || 1)}
             />

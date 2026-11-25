@@ -107,6 +107,7 @@ import { RecruitmentInboxPanel } from "@/components/crm/recruitment/RecruitmentI
 import { RecruitmentKaartView } from "@/components/crm/recruitment/RecruitmentKaartView";
 import { RecruitmentAgendaView } from "@/components/crm/recruitment/RecruitmentAgendaView";
 import { RecruitmentKandidaatMailModal } from "@/components/crm/recruitment/RecruitmentKandidaatMailModal";
+import { filterSollicitatieDuplicaten } from "@/lib/sollicitatie-duplicaten";
 import { cn } from "@/lib/utils";
 
 type ViewMode =
@@ -498,7 +499,8 @@ export function RecruitmentPanel() {
   const filtered = useMemo(() => {
     const q = search.trim().toLowerCase();
     const functieQ = functieFilter.trim().toLowerCase();
-    return items.filter((s) => {
+    const visible = filterSollicitatieDuplicaten(items);
+    return visible.filter((s) => {
       const st = normalizeSollicitatieStatus(s.status);
       if (statusFilter && st !== statusFilter) return false;
       if (functieQ) {
@@ -852,11 +854,11 @@ export function RecruitmentPanel() {
   const showListTools = view === "tabel" || view === "bellen";
 
   return (
-    <div className="flex h-full min-h-0 flex-col">
+    <div className="flex h-full min-h-0 min-w-0 flex-col">
       <div className="shrink-0 border-b border-line bg-white">
-        <div className="flex items-center gap-2 overflow-x-auto px-3 py-2 sm:px-4">
+        <div className="flex items-center gap-1.5 overflow-x-auto px-2 py-1.5 sm:gap-2 sm:px-4 sm:py-2">
           <nav
-            className="flex min-w-0 flex-1 items-center gap-1"
+            className="flex min-w-0 flex-1 items-center gap-0.5 sm:gap-1"
             aria-label="Recruitment menu"
           >
             {VIEW_NAV.filter((v) => v.group === "werk").map((item) => {
@@ -869,15 +871,16 @@ export function RecruitmentPanel() {
                   key={item.id}
                   type="button"
                   onClick={() => setView(item.id)}
+                  aria-label={item.label}
                   className={cn(
-                    "inline-flex shrink-0 items-center gap-1.5 rounded-lg px-3 py-2 text-sm font-semibold transition",
+                    "inline-flex shrink-0 items-center gap-1.5 rounded-lg px-2 py-2 text-sm font-semibold transition sm:px-3",
                     active
                       ? "bg-green text-white"
                       : "text-ink hover:bg-wash"
                   )}
                 >
                   <Icon className="size-4 shrink-0" aria-hidden />
-                  {item.label}
+                  <span className="hidden sm:inline">{item.label}</span>
                   {showUnread ? (
                     <span
                       className={cn(
@@ -906,15 +909,16 @@ export function RecruitmentPanel() {
                   key={item.id}
                   type="button"
                   onClick={() => setView(item.id)}
+                  aria-label={item.label}
                   className={cn(
-                    "inline-flex shrink-0 items-center gap-1.5 rounded-lg px-3 py-2 text-sm font-semibold transition",
+                    "inline-flex shrink-0 items-center gap-1.5 rounded-lg px-2 py-2 text-sm font-semibold transition sm:px-3",
                     active
                       ? "bg-green text-white"
                       : "text-muted hover:bg-wash hover:text-ink"
                   )}
                 >
                   <Icon className="size-4 shrink-0" aria-hidden />
-                  {item.label}
+                  <span className="hidden sm:inline">{item.label}</span>
                 </button>
               );
             })}
@@ -924,9 +928,10 @@ export function RecruitmentPanel() {
             size="sm"
             className="shrink-0"
             onClick={() => setAddOpen(true)}
+            aria-label="Nieuwe kandidaat"
           >
             <Plus data-icon="inline-start" />
-            Nieuw
+            <span className="hidden sm:inline">Nieuw</span>
           </Button>
         </div>
 
@@ -947,7 +952,7 @@ export function RecruitmentPanel() {
                 <NativeSelect
                   value={functieFilter}
                   onChange={(e) => setFunctieFilter(e.target.value)}
-                  className="min-w-[9rem]"
+                  className="w-full min-w-0 sm:w-auto sm:min-w-[9rem]"
                   aria-label="Filter op functie"
                 >
                   <NativeSelectOption value="">Alle functies</NativeSelectOption>
@@ -962,7 +967,7 @@ export function RecruitmentPanel() {
                   onChange={(e) =>
                     setStatusFilter(e.target.value as "" | SollicitatieStatus)
                   }
-                  className="min-w-[9rem]"
+                  className="w-full min-w-0 sm:w-auto sm:min-w-[9rem]"
                   aria-label="Filter op status"
                 >
                   <NativeSelectOption value="">Alle statussen</NativeSelectOption>
@@ -975,7 +980,7 @@ export function RecruitmentPanel() {
                 <NativeSelect
                   value={provincieFilter}
                   onChange={(e) => setProvincieFilter(e.target.value)}
-                  className="min-w-[10rem]"
+                  className="w-full min-w-0 sm:w-auto sm:min-w-[10rem]"
                   aria-label="Filter op provincie"
                 >
                   <NativeSelectOption value="">
@@ -1020,7 +1025,7 @@ export function RecruitmentPanel() {
                         [v.vraag]: e.target.value,
                       }))
                     }
-                    className="min-w-[9.5rem] max-w-[16rem]"
+                    className="w-full min-w-0 sm:w-auto sm:min-w-[9.5rem] sm:max-w-[16rem]"
                     aria-label={`Filter op ${v.label}`}
                   >
                     <NativeSelectOption value="">
@@ -1050,9 +1055,9 @@ export function RecruitmentPanel() {
         </div>
       ) : null}
 
-      <div className="flex min-h-0 flex-1 flex-col">
+      <div className="flex min-h-0 min-w-0 flex-1 flex-col">
         {view === "tabel" ? (
-          <div className="flex shrink-0 items-end justify-between gap-3 border-b border-line px-3 py-2.5 sm:px-4">
+          <div className="flex shrink-0 flex-col gap-2 border-b border-line px-3 py-2.5 sm:flex-row sm:items-end sm:justify-between sm:gap-3 sm:px-4">
             <div>
               <p className="text-sm font-semibold text-ink">Aanmeldingen</p>
               <p className="text-[12px] text-muted">
@@ -1159,6 +1164,7 @@ export function RecruitmentPanel() {
             onUnreadChange={setInboxUnread}
           />
         ) : view === "deadlines" ? (
+          <div className="min-h-0 flex-1 overflow-auto">
           <RecruitmentDeadlinesView
             onOpenKandidaat={openDetail}
             onSetStatus={async (id, status) => {
@@ -1172,6 +1178,7 @@ export function RecruitmentPanel() {
               setView("trainingen");
             }}
           />
+          </div>
         ) : view === "trainingen" ? (
           <RecruitmentTrainingenBoard
             kandidaten={items}
@@ -1196,7 +1203,83 @@ export function RecruitmentPanel() {
         ) : view === "tabel" && aanmeldLayout === "lijst" ? (
           <div className="flex min-h-0 flex-1 flex-col">
             <div className="min-h-0 flex-1 overflow-auto">
-              <table className="crm-table">
+              <div className="divide-y divide-line md:hidden">
+                {paged.map((s) => {
+                  const st = normalizeSollicitatieStatus(s.status);
+                  return (
+                    <article key={s.id} className="px-3 py-3">
+                      <div className="flex items-start gap-2.5">
+                        <button
+                          type="button"
+                          onClick={() => openDetail(s.id)}
+                          className="flex min-w-0 flex-1 items-center gap-2.5 text-left"
+                        >
+                          <Avatar size="sm" className="size-8 shrink-0">
+                            <AvatarFallback className="text-[11px]">
+                              {initials(s.naam)}
+                            </AvatarFallback>
+                          </Avatar>
+                          <div className="min-w-0">
+                            <p className="truncate font-medium text-ink">
+                              {s.naam}
+                            </p>
+                            <p className="truncate text-[12px] text-muted">
+                              {[s.functie, provincieOf(s)]
+                                .filter(Boolean)
+                                .join(" · ") || "—"}
+                            </p>
+                            {trainingOf(s) ? (
+                              <p className="truncate text-[11px] text-green-deeper">
+                                Training: {trainingOf(s)!.naam}
+                              </p>
+                            ) : null}
+                          </div>
+                        </button>
+                        <div onClick={stopBtn} className="max-w-[11rem] shrink-0">
+                          <SollicitatieStatusSelect
+                            status={st}
+                            disabled={saving}
+                            onChange={(next) => requestStatusChange(s.id, next)}
+                          />
+                        </div>
+                      </div>
+                      <div
+                        onClick={stopBtn}
+                        className="mt-2 flex flex-wrap items-center gap-1.5"
+                      >
+                        <PhoneCopyCell telefoon={s.telefoon} />
+                        <button
+                          type="button"
+                          disabled={!s.email?.trim()}
+                          onClick={() => openKandidaatMail(s)}
+                          className="inline-flex size-8 shrink-0 items-center justify-center rounded text-muted hover:bg-wash hover:text-green-dark disabled:cursor-not-allowed disabled:opacity-35"
+                          title={
+                            s.email?.trim()
+                              ? `Mail ${s.naam} via het portaal`
+                              : "Geen e-mailadres"
+                          }
+                          aria-label={
+                            s.email?.trim()
+                              ? `Mail ${s.naam} via het portaal`
+                              : "Geen e-mailadres"
+                          }
+                        >
+                          <Mail className="size-3.5" strokeWidth={2.25} />
+                        </button>
+                        {sollicitatieHeeftInfoToegestuurd(s.notitie) ? (
+                          <span className="text-[11px] font-semibold text-green-dark">
+                            Info toegestuurd
+                          </span>
+                        ) : null}
+                        <span className="ml-auto text-[11px] text-muted">
+                          {formatDateShort(s.created_at)}
+                        </span>
+                      </div>
+                    </article>
+                  );
+                })}
+              </div>
+              <table className="crm-table hidden md:table">
                 <thead>
                   <tr>
                     <th>Naam</th>
@@ -1335,7 +1418,7 @@ export function RecruitmentPanel() {
             ) : null}
           </div>
         ) : (
-          <div className="flex min-h-0 flex-1 gap-0 overflow-x-auto">
+          <div className="flex min-h-0 flex-1 gap-0 overflow-x-auto snap-x snap-mandatory">
             {KANBAN_COLUMNS.map((st) => {
               const col = byStatus.get(st) || [];
               const active = overStatus === st;
@@ -1343,7 +1426,7 @@ export function RecruitmentPanel() {
                 <div
                   key={st}
                   className={cn(
-                    "flex min-h-0 min-w-[12.5rem] flex-1 flex-col border-r border-line bg-wash/30 last:border-r-0",
+                    "flex min-h-0 w-[78vw] max-w-[16rem] shrink-0 snap-start flex-col border-r border-line bg-wash/30 last:border-r-0 sm:w-auto sm:min-w-[12.5rem] sm:max-w-none sm:flex-1",
                     active && "bg-green-soft/40 ring-1 ring-inset ring-green"
                   )}
                   onDragOver={(e: DragEvent) => {
