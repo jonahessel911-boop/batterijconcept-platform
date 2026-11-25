@@ -2187,17 +2187,18 @@ function WfWhatsappTemplateDialog({
   const [selected, setSelected] = useState<WfWhatsappTemplateId | null>(null);
 
   if (!target) return null;
+  const klant = target;
 
-  const phone = warmtefondsWhatsappPhone(target.telefoon);
+  const phone = warmtefondsWhatsappPhone(klant.telefoon);
 
   function openWhatsapp() {
     if (!selected || !phone) return;
     const bericht = buildWfWhatsappBericht({
       templateId: selected,
-      klantNaam: target.naam,
-      afspraakIso: target.afspraakAt || null,
+      klantNaam: klant.naam,
+      afspraakIso: klant.afspraakAt || null,
     });
-    const url = warmtefondsWhatsappUrl(target!.telefoon, bericht);
+    const url = warmtefondsWhatsappUrl(klant.telefoon, bericht);
     if (!url) return;
     window.open(url, "_blank", "noopener,noreferrer");
     onClose();
@@ -2221,9 +2222,9 @@ function WfWhatsappTemplateDialog({
               WhatsApp
             </p>
             <h2 className="mt-0.5 truncate font-display text-lg font-semibold text-ink">
-              {target.naam}
+              {klant.naam}
             </h2>
-            <p className="text-[12px] text-muted">{target.telefoon}</p>
+            <p className="text-[12px] text-muted">{klant.telefoon}</p>
           </div>
           <button
             type="button"
