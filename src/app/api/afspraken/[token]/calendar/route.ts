@@ -5,6 +5,7 @@ import { adresRegel } from "@/lib/format";
 import { buildIcsCalendar } from "@/lib/ics";
 import { afspraakDuurMinuten, afspraakSoortLabel } from "@/lib/afspraak-soort";
 import { appBaseUrl } from "@/lib/email/postmark";
+import { trackAgendaAdd } from "@/lib/afspraak-opvolging/agenda-track";
 
 export const runtime = "nodejs";
 
@@ -112,6 +113,13 @@ export async function GET(
     });
 
     const filename = `batterijconcept-afspraak-${afspraak.id.slice(0, 8)}.ics`;
+
+    // First-touch: ICS-download telt als agenda-add (server-side, betrouwbaarder dan client-click)
+    try {
+      await trackAgendaAdd(sb, afspraak.id, "ics");
+    } catch {
+      /* tracking mag ICS-response niet blokkeren */
+    }
 
     return new NextResponse(ics, {
       status: 200,

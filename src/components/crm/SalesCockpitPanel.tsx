@@ -2034,7 +2034,16 @@ function QualityTrendCard({
   const dualAxis = hasPercent && hasCount;
 
   const chartData = points.map((p) => {
-    const row: Record<string, string | number> = { label: p.label };
+    const row: Record<string, string | number> = {
+      label: p.label,
+      deals: p.deals,
+      timelyN: p.timelyN,
+      timelyBeoordeeldN: p.timelyBeoordeeldN,
+      holdN: p.holdN,
+      cancelledN: p.cancelledN,
+      paidLateN: p.paidLateN,
+      holdOrCancelledN: p.holdOrCancelledN,
+    };
     for (const m of selectedMetas) {
       const raw = p[m.id];
       row[m.id] = raw == null ? 0 : Number(raw);
@@ -2222,10 +2231,28 @@ function QualityTrendCard({
             }
             yWidth={dualAxis || !hasPercent ? 36 : 40}
             yWidthRight={40}
-            formatValue={(value, key) => {
+            formatValue={(value, key, row) => {
               const meta = QUALITY_TREND_METRICS.find((m) => m.id === key);
-              if (meta?.percent) return pctLabel(value);
-              return value.toLocaleString("nl-NL");
+              if (!meta?.percent) {
+                return value.toLocaleString("nl-NL");
+              }
+              const n =
+                key === "timelyPct"
+                  ? Number(row?.timelyN ?? 0)
+                  : key === "holdPct"
+                    ? Number(row?.holdN ?? 0)
+                    : key === "cancelledPct"
+                      ? Number(row?.cancelledN ?? 0)
+                      : key === "paidLatePct"
+                        ? Number(row?.paidLateN ?? 0)
+                        : key === "holdOrCancelledPct"
+                          ? Number(row?.holdOrCancelledN ?? 0)
+                          : 0;
+              if (key === "timelyPct") {
+                const den = Number(row?.timelyBeoordeeldN ?? 0);
+                return `${pctLabel(value)} · ${n.toLocaleString("nl-NL")}/${den.toLocaleString("nl-NL")} deals`;
+              }
+              return `${pctLabel(value)} · ${n.toLocaleString("nl-NL")} deals`;
             }}
             formatAxis={(value) => {
               if (dualAxis) return String(Math.round(value));

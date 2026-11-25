@@ -386,6 +386,16 @@ export interface Afspraak {
   reminder_48u_verstuurd?: boolean;
   avond_sms_verstuurd?: boolean;
   avond_mail_verstuurd?: boolean;
+  /** Eerste bezoek aan agenda-landing */
+  agenda_link_opened_at?: string | null;
+  /** Eerste agenda-actie (Google/Outlook/ICS) */
+  agenda_added_at?: string | null;
+  agenda_provider?:
+    | "google"
+    | "outlook_live"
+    | "outlook_office"
+    | "ics"
+    | null;
   created_at: string;
   updated_at: string;
   leads?: Pick<
@@ -403,6 +413,35 @@ export interface Afspraak {
     | "status"
   > | null;
   adviseurs?: Pick<Adviseur, "naam" | "email"> | null;
+}
+
+/** Audit-log van opvolging mail/SMS */
+export interface AfspraakOpvolgingBericht {
+  id: string;
+  created_at: string;
+  afspraak_id: string | null;
+  lead_id: string | null;
+  opvolging_flow: "legacy" | "intensief" | "rustig" | null;
+  step:
+    | "bevestiging"
+    | "social-proof"
+    | "reminder-48u"
+    | "avond-vooraf"
+    | "opwarm"
+    | "herinnering-24u"
+    | "test"
+    | string;
+  channel: "email" | "sms";
+  status: "sent" | "failed" | "skipped";
+  klant_naam: string | null;
+  to_email: string | null;
+  to_phone: string | null;
+  subject: string | null;
+  body_preview: string | null;
+  provider: string | null;
+  provider_message_id: string | null;
+  tag: string | null;
+  error: string | null;
 }
 
 export interface Lead {

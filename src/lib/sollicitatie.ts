@@ -42,8 +42,8 @@ export const RECRUITMENT_GESPREK_LOCATIE_OPTIES = [
   "Daltonlaan 500, Utrecht",
   "Daltonlaan 500, 3584 BK Utrecht",
 ] as const;
-export const RECRUITMENT_GESPREK_TEL = "+31 6 12 20 45 25";
-export const RECRUITMENT_GESPREK_CONTACT = "Huub";
+export const RECRUITMENT_GESPREK_TEL = "+31 6 39 25 36 47";
+export const RECRUITMENT_GESPREK_CONTACT = "Jona";
 
 /** Standaard trainingslocatie (zelfde kantoor). */
 export const RECRUITMENT_TRAINING_LOCATIE = RECRUITMENT_GESPREK_LOCATIE;

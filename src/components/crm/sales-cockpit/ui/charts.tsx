@@ -55,7 +55,7 @@ function ChartTooltip({
   active?: boolean;
   payload?: readonly TipItem[];
   label?: string | number;
-  formatValue?: (value: number, key: string) => string;
+  formatValue?: (value: number, key: string, row?: ChartRow) => string;
 }) {
   if (!active || !payload?.length) return null;
   const first = payload[0];
@@ -89,7 +89,7 @@ function ChartTooltip({
               </span>
               <span className="font-semibold tabular-nums text-zinc-950">
                 {formatValue
-                  ? formatValue(detail.value, detail.label)
+                  ? formatValue(detail.value, detail.label, first?.payload)
                   : detail.value.toLocaleString("nl-NL")}
               </span>
             </div>
@@ -98,7 +98,11 @@ function ChartTooltip({
             <span className="font-medium text-zinc-500">Totaal</span>
             <span className="font-semibold tabular-nums text-zinc-950">
               {formatValue
-                ? formatValue(Number(first?.value ?? 0), String(heading))
+                ? formatValue(
+                    Number(first?.value ?? 0),
+                    String(heading),
+                    first?.payload
+                  )
                 : Number(first?.value ?? 0).toLocaleString("nl-NL")}
             </span>
           </div>
@@ -122,7 +126,7 @@ function ChartTooltip({
                 </span>
                 <span className="font-semibold tabular-nums text-zinc-950">
                   {formatValue
-                    ? formatValue(value, key)
+                    ? formatValue(value, key, item.payload)
                     : value.toLocaleString("nl-NL")}
                 </span>
               </div>
@@ -187,7 +191,7 @@ export function BarCompareChart({
   data: ChartRow[];
   xKey: string;
   series: ChartSeries[];
-  formatValue?: (value: number, key: string) => string;
+  formatValue?: (value: number, key: string, row?: ChartRow) => string;
 }) {
   return (
     <ChartFrame series={series} empty={data.length === 0}>
@@ -230,7 +234,7 @@ export function DualAreaChart({
   data: ChartRow[];
   xKey: string;
   series: ChartSeries[];
-  formatValue?: (value: number, key: string) => string;
+  formatValue?: (value: number, key: string, row?: ChartRow) => string;
   formatAxis?: (value: number) => string;
   formatAxisRight?: (value: number) => string;
   allowDecimals?: boolean;
@@ -323,7 +327,7 @@ export function AreaTrendChart({
   seriesKey: string;
   label: string;
   color?: string;
-  formatValue?: (value: number, key: string) => string;
+  formatValue?: (value: number, key: string, row?: ChartRow) => string;
   formatAxis?: (value: number) => string;
   allowDecimals?: boolean;
   yWidth?: number;
@@ -355,7 +359,7 @@ export function DistributionPieChart({
   nameKey?: string;
   valueKey?: string;
   colorKey?: string;
-  formatValue?: (value: number, key: string) => string;
+  formatValue?: (value: number, key: string, row?: ChartRow) => string;
   innerRadius?: number;
   outerRadius?: number;
 }) {
@@ -438,7 +442,7 @@ export function HorizontalBarChart({
   labelKey?: string;
   valueKey?: string;
   color?: string | ((row: ChartRow) => string);
-  formatValue?: (value: number, key: string) => string;
+  formatValue?: (value: number, key: string, row?: ChartRow) => string;
   reference?: number;
   labelWidth?: number;
 }) {
@@ -485,7 +489,7 @@ export function StackedBarChart({
   data: ChartRow[];
   xKey: string;
   series: ChartSeries[];
-  formatValue?: (value: number, key: string) => string;
+  formatValue?: (value: number, key: string, row?: ChartRow) => string;
   stackOffset?: "expand";
 }) {
   return (
@@ -536,7 +540,7 @@ export function HorizontalStackedBarChart({
   data: ChartRow[];
   labelKey?: string;
   series: ChartSeries[];
-  formatValue?: (value: number, key: string) => string;
+  formatValue?: (value: number, key: string, row?: ChartRow) => string;
   stackOffset?: "expand";
   labelWidth?: number;
 }) {
