@@ -10,6 +10,7 @@ import {
   isAlphaEssMetOmvormerRegel,
   isKortingRegel,
   isVerborgenOfferteRegel,
+  isWarmtefondsAanvraagRegel,
   omvormerOmschrijvingVoor,
 } from "@/lib/offerte-regels";
 import { productZichtbaarVoorAdviseur } from "@/lib/warmtepomp-producten";
@@ -336,13 +337,15 @@ export function MaakOfferteModal({
     setSaving(true);
     setError(null);
     try {
-      const regels = previewLines.map((l) => ({
-        product_id: l.product_id || undefined,
-        omschrijving: l.omschrijving,
-        aantal: l.aantal,
-        prijs_ex_btw: l.prijs_ex_btw,
-        btw_percentage: l.btw_percentage,
-      }));
+      const regels = previewLines
+        .filter((l) => !isWarmtefondsAanvraagRegel(l))
+        .map((l) => ({
+          product_id: l.product_id || undefined,
+          omschrijving: l.omschrijving,
+          aantal: l.aantal,
+          prijs_ex_btw: l.prijs_ex_btw,
+          btw_percentage: l.btw_percentage,
+        }));
 
       const res = await fetch("/api/offertes", {
         method: "POST",

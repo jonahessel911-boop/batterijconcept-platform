@@ -5,6 +5,7 @@ import { getSupabaseAdmin } from "@/lib/supabase";
 import { errMessage } from "@/lib/errors";
 import { COOKIE_NAME, verifySessionToken } from "@/lib/auth-session";
 import { logLeadEvent } from "@/lib/lead-events";
+import { isWarmtefondsAanvraagRegel } from "@/lib/offerte-regels";
 
 export const runtime = "nodejs";
 
@@ -66,7 +67,16 @@ export async function POST(req: NextRequest) {
 
     let subtotaal = 0;
     let btw = 0;
-    const prepared = body.regels.map((r, i) => {
+    // Warmtefonds is alleen voorbehoud-tekst — nooit als offerte-regel opslaan
+    // (ook niet als een oude client die regel nog meestuurt).
+    const inputRegels = body.regels.filter((r) => !isWarmtefondsAanvraagRegel(r));
+    if (inputRegels.length === 0) {
+      return NextResponse.json(
+        { error: "lead_id en minstens 1 regel zijn verplicht" },
+        { status: 400 }
+      );
+    }
+    const prepared = inputRegels.map((r, i) => {
       const aantal = Number(r.aantal ?? 1);
       const prijs = Number(r.prijs_ex_btw);
       const pct = Number(r.btw_percentage ?? 21);
