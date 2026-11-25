@@ -19,6 +19,7 @@ import {
 import {
   isInternKortingRegel,
   isKortingRegel,
+  isWarmtefondsAanvraagRegel,
   offertePrijsSpecificatie,
 } from "@/lib/offerte-regels";
 import {
@@ -679,11 +680,13 @@ export function OffertePage() {
 
       <Panel
         title="Regels"
-        subtitle={`${regels.filter((r) => !isKortingRegel(r)).length} producten`}
+        subtitle={`${regels.filter((r) => !isKortingRegel(r) && !isWarmtefondsAanvraagRegel(r)).length} producten`}
       >
         {(() => {
           const spec = offertePrijsSpecificatie(offerte, regels);
-          const productRegels = regels.filter((r) => !isKortingRegel(r));
+          const productRegels = regels.filter(
+            (r) => !isKortingRegel(r) && !isWarmtefondsAanvraagRegel(r)
+          );
           const kortingRegels = regels.filter((r) => isKortingRegel(r));
           return (
             <>

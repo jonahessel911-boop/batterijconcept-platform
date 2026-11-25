@@ -2,7 +2,16 @@ import type { OfferteRegel } from "@/types/database";
 import { MODULE_KWH } from "@/lib/inkoop";
 
 const INSTALLATIE_OMSCHRIJVING = "Installatie + installatieopname";
+/** Legacy offerte-regel — niet meer toevoegen; wel filteren bij weergave/PDF. */
 const WARMTEFONDS_OMSCHRIJVING = "Warmtefonds aanvraag service";
+const WARMTEFONDS_AANVRAAG_RE = /warmtefonds\s+aanvraag/i;
+
+/** Oude €0-regel “Warmtefonds aanvraag service” — niet meer op klantofferte. */
+export function isWarmtefondsAanvraagRegel(r: {
+  omschrijving?: string | null;
+}): boolean {
+  return WARMTEFONDS_AANVRAAG_RE.test(r.omschrijving || "");
+}
 
 function hasOmschrijving(
   regels: { omschrijving: string }[],
@@ -287,15 +296,22 @@ function virtualRegel(
 
 /**
  * Vult ontbrekende standaardregels aan voor weergave/PDF
- * (omvormer bij 9,3/18,6 kWh + installatie + Warmtefonds).
+ * (omvormer bij 9,3/18,6 kWh + installatie).
+ * Warmtefonds staat alleen als voorbehoud-tekst onderaan, niet als losse regel.
  * Kortingsregels worden weggelaten — die horen onder de prijs als − €.
  */
 export function offerteRegelsVoorWeergave(
   regels: OfferteRegel[],
   opts: { financieringVoorbehoud?: boolean | null } = {}
 ): OfferteRegel[] {
+  void opts.financieringVoorbehoud;
   const sorted = [...regels]
-    .filter((r) => !isKortingRegel(r) && !isVerborgenOfferteRegel(r))
+    .filter(
+      (r) =>
+        !isKortingRegel(r) &&
+        !isVerborgenOfferteRegel(r) &&
+        !isWarmtefondsAanvraagRegel(r)
+    )
     .sort((a, b) => a.sort_order - b.sort_order);
   const out: OfferteRegel[] = [];
   const maxSort = sorted.reduce((m, r) => Math.max(m, r.sort_order), 0);
@@ -321,13 +337,6 @@ export function offerteRegelsVoorWeergave(
     !hasOmschrijving(out, /installatie\s*\+\s*installatieopname/i)
   ) {
     out.push(virtualRegel(INSTALLATIE_OMSCHRIJVING, next++));
-  }
-
-  if (
-    opts.financieringVoorbehoud &&
-    !hasOmschrijving(out, /warmtefonds\s+aanvraag/i)
-  ) {
-    out.push(virtualRegel(WARMTEFONDS_OMSCHRIJVING, next++));
   }
 
   return out;

@@ -197,21 +197,8 @@ export function MaakOfferteModal({
       out = withExtraKorting;
     }
 
-    if (
-      financiering &&
-      !out.some((l) => /warmtefonds\s+aanvraag/i.test(l.omschrijving))
-    ) {
-      out.push({
-        key: "warmtefonds-service",
-        product_id: null,
-        omschrijving: "Warmtefonds aanvraag service",
-        aantal: 1,
-        prijs_ex_btw: 0,
-        btw_percentage: 21,
-      });
-    }
     return out;
-  }, [lines, useKorting, kortingInc, kortingZichtbaar, financiering]);
+  }, [lines, useKorting, kortingInc, kortingZichtbaar]);
 
   const totaalInc = useMemo(() => linesTotaalInc(previewLines), [previewLines]);
 
@@ -779,8 +766,8 @@ export function MaakOfferteModal({
               <span>
                 <span className="font-medium">Warmtefonds</span>
                 <span className="mt-1 block text-xs text-muted">
-                  Onder voorbehoud van financiering · regel “Warmtefonds
-                  aanvraag service” op de offerte.
+                  Onder voorbehoud van financiering Warmtefonds (tekst
+                  onderaan de offerte).
                 </span>
               </span>
             </label>
