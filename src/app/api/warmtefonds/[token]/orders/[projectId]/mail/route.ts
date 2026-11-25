@@ -7,10 +7,8 @@ import { klantContactEmail } from "@/lib/email/templates";
 import { logLeadEvent } from "@/lib/lead-events";
 import { adresRegel, formatDateTimeNl } from "@/lib/format";
 import { WF_KLANTMAILS_ENABLED } from "@/lib/warmtefonds-automatisering";
-import {
-  isWarmtefondsPortalProject,
-  resolveWarmtefondsOperator,
-} from "@/lib/warmtefonds-portal";
+import { isWarmtefondsPortalProject } from "@/lib/warmtefonds-portal";
+import { requireWarmtefondsPortalOperator } from "@/lib/warmtefonds-portal-guard";
 
 export const runtime = "nodejs";
 
@@ -38,11 +36,10 @@ export async function POST(
         { status: 503 }
       );
     }
+    const access = await requireWarmtefondsPortalOperator(req, token);
+    if ("error" in access) return access.error;
+    const operator = access.operator;
     const sb = getSupabaseAdmin();
-    const operator = await resolveWarmtefondsOperator(sb, token);
-    if (!operator) {
-      return NextResponse.json({ error: "Portaal niet gevonden" }, { status: 404 });
-    }
 
     const body = (await req.json().catch(() => ({}))) as {
       to?: string;
@@ -134,21 +131,11 @@ export async function POST(
       );
     }
 
-    // Mail verstuurd → markeer contact (status + teller als Contact-knop dat nog niet deed)
-    const curFs = project.financiering_status as string | null;
-    const early =
-      !curFs ||
-      curFs === "doorgestuurd_naar_edwin" ||
-      curFs === "documenten_aanleveren" ||
-      curFs === "contact_verstuurd" ||
-      curFs === "afspraak_ingepland";
     const prevPogingen = Number(
       (project as { warmtefonds_contact_pogingen?: number | null })
         .warmtefonds_contact_pogingen || 0
     );
     const projectPatch: Record<string, unknown> = {};
-    if (early) projectPatch.financiering_status = "contact_verstuurd";
-    // Alleen +1 als nog geen poging geregistreerd (anders deed Contact-knop dat al)
     if (!Number.isFinite(prevPogingen) || prevPogingen < 1) {
       projectPatch.warmtefonds_contact_pogingen = 1;
     }
@@ -165,14 +152,6 @@ export async function POST(
         )
       ) {
         console.error("WF contact status patch:", patchErr);
-      } else if (patchErr) {
-        // Kolom ontbreekt: alleen status zetten
-        if (early) {
-          await sb
-            .from("projecten")
-            .update({ financiering_status: "contact_verstuurd" })
-            .eq("id", projectId);
-        }
       }
     }
 
@@ -199,7 +178,7 @@ export async function POST(
       ok: true,
       sent: true,
       to,
-      financiering_status: early ? "contact_verstuurd" : curFs,
+      financiering_status: project.financiering_status ?? null,
     });
   } catch (e) {
     return NextResponse.json(

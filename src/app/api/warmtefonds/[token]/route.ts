@@ -8,29 +8,25 @@ import {
   isWarmtefondsPortalProject,
   isWarmtefondsRelatedProject,
   mergeWarmtefondsAanvragenOpAdres,
-  resolveWarmtefondsOperator,
   WF_PORTAL_PROJECT_SELECT,
   WF_PORTAL_PROJECT_SELECT_MIN,
   withPortalBedragen,
 } from "@/lib/warmtefonds-portal";
+import { requireWarmtefondsPortalOperator } from "@/lib/warmtefonds-portal-guard";
 
 export const runtime = "nodejs";
 
 /** GET /api/warmtefonds/[token] — operator + Warmtefonds-aanvragen */
 export async function GET(
-  _req: NextRequest,
+  req: NextRequest,
   ctx: { params: Promise<{ token: string }> }
 ) {
   const { token } = await ctx.params;
   try {
+    const access = await requireWarmtefondsPortalOperator(req, token);
+    if ("error" in access) return access.error;
+    const operator = access.operator;
     const sb = getSupabaseAdmin();
-    const operator = await resolveWarmtefondsOperator(sb, token);
-    if (!operator) {
-      return NextResponse.json(
-        { error: "Portaal niet gevonden" },
-        { status: 404 }
-      );
-    }
 
     // Alleen doorgestuurde WF-aanvragen. Zelfde adres wordt daarna
     // tot één aanvraag samengevoegd. Eigen middelen vallen af in
@@ -66,7 +62,8 @@ export async function GET(
             notities, created_at, updated_at,
             leads(
               id, naam, email, telefoon, lead_number,
-              postcode, huisnummer, toevoeging, straat, plaats, notities
+              postcode, huisnummer, toevoeging, straat, plaats, notities,
+              adviseur_id, adviseurs!adviseur_id(id, naam)
             ),
             offertes(id, offerte_nummer, status, ondertekend_op, financiering_voorbehoud)
           `

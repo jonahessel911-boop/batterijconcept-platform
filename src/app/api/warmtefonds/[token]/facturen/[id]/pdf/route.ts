@@ -4,10 +4,8 @@ import { errMessage } from "@/lib/errors";
 import { buildFactuurPdf } from "@/lib/pdf-factuur";
 import { loadOfferteKortingEx } from "@/lib/offerte-regels";
 import { selectFactuurById } from "@/lib/factuur-query";
-import {
-  isWarmtefondsPortalProject,
-  resolveWarmtefondsOperator,
-} from "@/lib/warmtefonds-portal";
+import { isWarmtefondsPortalProject } from "@/lib/warmtefonds-portal";
+import { requireWarmtefondsPortalOperator } from "@/lib/warmtefonds-portal-guard";
 
 export const runtime = "nodejs";
 
@@ -19,11 +17,9 @@ export async function GET(
   const { token, id } = await ctx.params;
   const inline = req.nextUrl.searchParams.get("inline") === "1";
   try {
+    const access = await requireWarmtefondsPortalOperator(req, token);
+    if ("error" in access) return access.error;
     const sb = getSupabaseAdmin();
-    const operator = await resolveWarmtefondsOperator(sb, token);
-    if (!operator) {
-      return NextResponse.json({ error: "Portaal niet gevonden" }, { status: 404 });
-    }
 
     const loaded = await selectFactuurById(sb, id);
     const factuur = loaded.data as {

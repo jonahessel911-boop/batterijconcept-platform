@@ -1,8 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { errMessage } from "@/lib/errors";
-import { getSupabaseAdmin } from "@/lib/supabase";
 import { buildDurationMap } from "@/lib/travel-time";
-import { resolveWarmtefondsOperator } from "@/lib/warmtefonds-portal";
+import { requireWarmtefondsPortalOperator } from "@/lib/warmtefonds-portal-guard";
 
 export const runtime = "nodejs";
 
@@ -18,16 +17,8 @@ export async function POST(
 ) {
   const { token } = await ctx.params;
   try {
-    const operator = await resolveWarmtefondsOperator(
-      getSupabaseAdmin(),
-      token
-    );
-    if (!operator) {
-      return NextResponse.json(
-        { error: "Portaal niet gevonden" },
-        { status: 404 }
-      );
-    }
+    const access = await requireWarmtefondsPortalOperator(req, token);
+    if ("error" in access) return access.error;
 
     const body = (await req.json().catch(() => ({}))) as { legs?: LegIn[] };
     const legs = (Array.isArray(body.legs) ? body.legs : [])

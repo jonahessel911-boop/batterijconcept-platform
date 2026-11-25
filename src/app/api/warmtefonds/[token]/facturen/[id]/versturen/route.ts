@@ -1,29 +1,22 @@
 import { NextRequest, NextResponse } from "next/server";
 import { errMessage } from "@/lib/errors";
 import { verstuurFactuurNaarKlant } from "@/lib/factuur-versturen";
-import {
-  isWarmtefondsPortalProject,
-  resolveWarmtefondsOperator,
-} from "@/lib/warmtefonds-portal";
+import { isWarmtefondsPortalProject } from "@/lib/warmtefonds-portal";
+import { requireWarmtefondsPortalOperator } from "@/lib/warmtefonds-portal-guard";
 import { getSupabaseAdmin } from "@/lib/supabase";
 
 export const runtime = "nodejs";
 
 /** POST — verstuur klantfactuur (concept-restant) vanuit het WF-portaal. */
 export async function POST(
-  _req: NextRequest,
+  req: NextRequest,
   ctx: { params: Promise<{ token: string; id: string }> }
 ) {
   const { token, id } = await ctx.params;
   try {
+    const access = await requireWarmtefondsPortalOperator(req, token);
+    if ("error" in access) return access.error;
     const sb = getSupabaseAdmin();
-    const operator = await resolveWarmtefondsOperator(sb, token);
-    if (!operator) {
-      return NextResponse.json(
-        { error: "Portaal niet gevonden" },
-        { status: 404 }
-      );
-    }
 
     const { data: factuur, error } = await sb
       .from("facturen")

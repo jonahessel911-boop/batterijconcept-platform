@@ -10,12 +10,12 @@ import {
   isMissingWfProjectColumn,
   isWarmtefondsPortalProject,
   isWarmtefondsRelatedProject,
-  resolveWarmtefondsOperator,
   WF_PORTAL_PROJECT_SELECT,
   WF_PORTAL_PROJECT_SELECT_MIN,
   wfPortalStatusLabel,
   withPortalBedragen,
 } from "@/lib/warmtefonds-portal";
+import { requireWarmtefondsPortalOperator } from "@/lib/warmtefonds-portal-guard";
 
 export const runtime = "nodejs";
 
@@ -43,7 +43,8 @@ async function loadOrder(sb: ReturnType<typeof getSupabaseAdmin>, projectId: str
         notities, created_at, updated_at,
         leads(
           id, naam, email, telefoon, lead_number,
-          postcode, huisnummer, toevoeging, straat, plaats, notities
+          postcode, huisnummer, toevoeging, straat, plaats, notities,
+          adviseur_id, adviseurs!adviseur_id(id, naam)
         ),
         offertes(id, offerte_nummer, status, ondertekend_op, financiering_voorbehoud)
       `
@@ -59,19 +60,15 @@ async function loadOrder(sb: ReturnType<typeof getSupabaseAdmin>, projectId: str
 
 /** GET /api/warmtefonds/[token]/orders/[projectId] */
 export async function GET(
-  _req: NextRequest,
+  req: NextRequest,
   ctx: { params: Promise<{ token: string; projectId: string }> }
 ) {
   const { token, projectId } = await ctx.params;
   try {
+    const access = await requireWarmtefondsPortalOperator(req, token);
+    if ("error" in access) return access.error;
+    const operator = access.operator;
     const sb = getSupabaseAdmin();
-    const operator = await resolveWarmtefondsOperator(sb, token);
-    if (!operator) {
-      return NextResponse.json(
-        { error: "Portaal niet gevonden" },
-        { status: 404 }
-      );
-    }
 
     const order = await loadOrder(sb, projectId);
     if (!order) {
@@ -191,80 +188,6 @@ export async function GET(
       pdf: `/api/warmtefonds/${token}/facturen/${f.id}/pdf`,
     }));
 
-    // Als dossier al op aanbod staat maar nog geen restant-concept: alsnog klaarzetten
-    const fs = (order as { financiering_status?: string | null })
-      .financiering_status;
-    const heeftRestant = facturen.some((f) => f.isRestant);
-    if (
-      (fs === "aanbod_ondertekenen" || fs === "aanvraag_goedgekeurd") &&
-      !heeftRestant
-    ) {
-      try {
-        const offRaw = (order as { offertes?: unknown }).offertes;
-        const off = Array.isArray(offRaw) ? offRaw[0] : offRaw;
-        const offerte = off as {
-          id?: string;
-          offerte_nummer?: string | null;
-          financiering_voorbehoud?: boolean | null;
-          totaal_inc_btw?: number | null;
-          subtotaal_ex_btw?: number | null;
-        } | null;
-        const leadIdForFactuur = (order as { lead_id?: string }).lead_id;
-        if (
-          offerte?.id &&
-          offerte.financiering_voorbehoud &&
-          leadIdForFactuur
-        ) {
-          const { ensureRestantDraftFactuur } = await import(
-            "@/lib/ensure-btw-factuur"
-          );
-          await ensureRestantDraftFactuur(sb, {
-            offerteId: offerte.id,
-            leadId: leadIdForFactuur,
-            projectId,
-            offerteNummer:
-              offerte.offerte_nummer ||
-              (order as { project_nummer?: string }).project_nummer ||
-              "",
-            orderIncBtw: Number(offerte.totaal_inc_btw) || 0,
-            orderExBtw: Number(offerte.subtotaal_ex_btw) || 0,
-            warmtefonds: true,
-          });
-
-          const again = await sb
-            .from("facturen")
-            .select(
-              "id, factuur_nummer, status, omschrijving, bedrag_inc_btw, credit_van_factuur_id, created_at"
-            )
-            .eq("project_id", projectId)
-            .order("created_at", { ascending: true });
-          if (!again.error && again.data) {
-            facRows = again.data as FactuurRow[];
-            facturen = facRows.map((f) => ({
-              id: f.id,
-              nummer: f.factuur_nummer || "—",
-              status: f.status || "concept",
-              statusLabel: factuurStatusLabel(f.status),
-              bedragInc:
-                f.bedrag_inc_btw != null &&
-                Number.isFinite(Number(f.bedrag_inc_btw))
-                  ? Number(f.bedrag_inc_btw)
-                  : null,
-              omschrijving: f.omschrijving?.trim() || null,
-              isCredit: Boolean(f.credit_van_factuur_id),
-              isRestant: isRestantFactuurOmschrijving(f.omschrijving),
-              pdf: `/api/warmtefonds/${token}/facturen/${f.id}/pdf`,
-            }));
-          }
-        }
-      } catch (e) {
-        console.error(
-          "ensureRestantDraftFactuur (warmtefonds portaal GET):",
-          e
-        );
-      }
-    }
-
     return NextResponse.json({
       operator: { id: operator.id, naam: operator.naam },
       order: withPortalBedragen(order),
@@ -290,7 +213,7 @@ export async function PATCH(
     warmtefonds_afspraak_at?: string | null;
     warmtefonds_notities?: string | null;
     notitie?: string | null;
-    /** Contact-knop: +1 poging + status contact_verstuurd */
+    /** Contactpoging (bel/WhatsApp): +1 teller, géén statuswijziging */
     contact_poging?: boolean;
   };
   try {
@@ -300,14 +223,10 @@ export async function PATCH(
   }
 
   try {
+    const access = await requireWarmtefondsPortalOperator(req, token);
+    if ("error" in access) return access.error;
+    const operator = access.operator;
     const sb = getSupabaseAdmin();
-    const operator = await resolveWarmtefondsOperator(sb, token);
-    if (!operator) {
-      return NextResponse.json(
-        { error: "Portaal niet gevonden" },
-        { status: 404 }
-      );
-    }
 
     const before = await loadOrder(sb, projectId);
     if (!before) {
@@ -376,18 +295,6 @@ export async function PATCH(
       );
       const nextCount = (Number.isFinite(prev) ? prev : 0) + 1;
       patch.warmtefonds_contact_pogingen = nextCount;
-      // Alleen naar contact_verstuurd als nog vroeg in de pipeline
-      const curFs = (before as { financiering_status?: string | null })
-        .financiering_status;
-      const early =
-        !curFs ||
-        curFs === "doorgestuurd_naar_edwin" ||
-        curFs === "documenten_aanleveren" ||
-        curFs === "contact_verstuurd" ||
-        curFs === "afspraak_ingepland";
-      if (early && body.financiering_status === undefined) {
-        patch.financiering_status = "contact_verstuurd";
-      }
     }
 
     if ("financiering_status" in patch) {

@@ -1,23 +1,19 @@
 import { NextRequest, NextResponse } from "next/server";
 import { errMessage } from "@/lib/errors";
 import { verstuurEdergyFactuur } from "@/lib/edergy-factuur";
-import { resolveWarmtefondsOperator } from "@/lib/warmtefonds-portal";
-import { getSupabaseAdmin } from "@/lib/supabase";
+import { requireWarmtefondsPortalOperator } from "@/lib/warmtefonds-portal-guard";
 
 export const runtime = "nodejs";
 
 /** POST — verstuur Edergy-creditfactuur naar BatterijConcept. */
 export async function POST(
-  _req: NextRequest,
+  req: NextRequest,
   ctx: { params: Promise<{ token: string; id: string }> }
 ) {
   const { token, id } = await ctx.params;
   try {
-    const sb = getSupabaseAdmin();
-    const operator = await resolveWarmtefondsOperator(sb, token);
-    if (!operator) {
-      return NextResponse.json({ error: "Portaal niet gevonden" }, { status: 404 });
-    }
+    const access = await requireWarmtefondsPortalOperator(req, token);
+    if ("error" in access) return access.error;
 
     const result = await verstuurEdergyFactuur({ factuurId: id });
     if (!result.ok) {

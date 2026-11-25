@@ -18,6 +18,7 @@ import {
 import { isWarmtefondsStopStatus } from "@/lib/warmtefonds-portal";
 import { WarmtefondsAfspraakForm } from "@/components/warmtefonds/WarmtefondsAfspraakForm";
 import { WarmtefondsContactMail } from "@/components/warmtefonds/WarmtefondsContactMail";
+import { WarmtefondsContactPopup } from "@/components/warmtefonds/WarmtefondsContactPopup";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Button, buttonVariants } from "@/components/ui/button";
@@ -60,7 +61,20 @@ type LeadLite = {
   straat?: string | null;
   plaats?: string | null;
   notities?: string | null;
+  adviseur_id?: string | null;
+  adviseurs?:
+    | { id?: string; naam?: string | null }
+    | { id?: string; naam?: string | null }[]
+    | null;
 };
+
+function adviseurNaamVanLead(lead: LeadLite | null): string | null {
+  if (!lead) return null;
+  const raw = lead.adviseurs;
+  const row = Array.isArray(raw) ? raw[0] : raw;
+  const naam = row?.naam?.trim();
+  return naam || null;
+}
 
 type OrderDetail = {
   id: string;
@@ -172,6 +186,8 @@ export function WarmtefondsOrderDetailPage() {
   const [okMsg, setOkMsg] = useState<string | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
   const [contactOpen, setContactOpen] = useState(false);
+  const [mailOpen, setMailOpen] = useState(false);
+  const [operatorNaam, setOperatorNaam] = useState("");
   const [afspraakOpen, setAfspraakOpen] = useState(false);
   const [declaratieConfirmOpen, setDeclaratieConfirmOpen] = useState(false);
   const [declaratieFactuur, setDeclaratieFactuur] =
@@ -185,30 +201,62 @@ export function WarmtefondsOrderDetailPage() {
     setWfNotities(o.warmtefonds_notities || "");
   }, []);
 
-  const load = useCallback(async () => {
-    setLoading(true);
-    setError(null);
-    try {
-      const res = await fetch(
-        `/api/warmtefonds/${token}/orders/${projectId}`
-      );
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error || "Niet gevonden");
-      const o = data.order as OrderDetail;
-      setOrder(o);
-      setEvents(data.events || []);
-      setFacturen((data.facturen || []) as PortalFactuur[]);
-      syncForm(o);
-    } catch (e) {
-      setError(e instanceof Error ? e.message : "Fout");
-    } finally {
-      setLoading(false);
-    }
-  }, [token, projectId, syncForm]);
+  const load = useCallback(
+    async (signal?: AbortSignal) => {
+      const tok = Array.isArray(token) ? token[0] : token;
+      const pid = Array.isArray(projectId) ? projectId[0] : projectId;
+      if (!tok || !pid) {
+        setError("Ongeldige aanvraag-link");
+        setLoading(false);
+        return;
+      }
+      setLoading(true);
+      setError(null);
+      try {
+        const res = await fetch(`/api/warmtefonds/${tok}/orders/${pid}`, {
+          credentials: "include",
+          signal,
+        });
+        if (res.status === 401) {
+          setError("Niet ingelogd — open /warmtefonds/login.");
+          return;
+        }
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) throw new Error(data.error || "Niet gevonden");
+        const o = data.order as OrderDetail;
+        if (!o) throw new Error("Aanvraag niet gevonden");
+        setOperatorNaam(
+          typeof data.operator?.naam === "string" ? data.operator.naam : ""
+        );
+        setOrder(o);
+        setEvents(data.events || []);
+        setFacturen((data.facturen || []) as PortalFactuur[]);
+        syncForm(o);
+      } catch (e) {
+        if (signal?.aborted) {
+          if (signal.reason === "timeout") {
+            setError("Laden duurde te lang. Vernieuw de pagina.");
+          }
+          return;
+        }
+        const name = e instanceof Error ? e.name : "";
+        if (name === "AbortError") return;
+        setError(e instanceof Error ? e.message : "Fout");
+      } finally {
+        setLoading(false);
+      }
+    },
+    [token, projectId, syncForm]
+  );
 
   useEffect(() => {
-    const id = requestAnimationFrame(() => void load());
-    return () => cancelAnimationFrame(id);
+    const ac = new AbortController();
+    const t = window.setTimeout(() => ac.abort("timeout"), 20000);
+    void load(ac.signal);
+    return () => {
+      window.clearTimeout(t);
+      ac.abort("unmount");
+    };
   }, [load]);
 
   useEffect(() => {
@@ -293,13 +341,12 @@ export function WarmtefondsOrderDetailPage() {
     }
   }
 
-  async function openContact() {
-    setContactOpen(true);
+  async function logContactPoging(extra?: Record<string, unknown>) {
     try {
       await fetch(`/api/warmtefonds/${token}/orders/${projectId}`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ contact_poging: true }),
+        body: JSON.stringify({ contact_poging: true, ...extra }),
       });
       await load();
     } catch {
@@ -386,6 +433,7 @@ export function WarmtefondsOrderDetailPage() {
     : null;
 
   const klantNaam = lead?.naam || order.titel || "Project";
+  const adviseurNaam = adviseurNaamVanLead(lead);
   const st = (order.status || "").toLowerCase();
   const isHold =
     st === "hold_sales_actie" || st === "hold_sales";
@@ -543,6 +591,11 @@ export function WarmtefondsOrderDetailPage() {
                 <p className="mt-1 text-sm text-muted">
                   {lead ? adresRegel(lead) || "—" : "—"}
                 </p>
+                {adviseurNaam ? (
+                  <p className="mt-0.5 text-sm text-muted">
+                    Adviseur: {adviseurNaam}
+                  </p>
+                ) : null}
                 <div className="mt-3 flex flex-wrap gap-2">
                   {telHref ? (
                     <a
@@ -562,7 +615,7 @@ export function WarmtefondsOrderDetailPage() {
                       variant="outline"
                       size="sm"
                       className="gap-1.5 rounded-full"
-                      onClick={() => void openContact()}
+                      onClick={() => setMailOpen(true)}
                     >
                       <Mail className="size-3.5" />
                       Mailen
@@ -746,18 +799,29 @@ export function WarmtefondsOrderDetailPage() {
                 </h2>
                 <p className="mt-1 text-sm text-muted">
                   {poort.soort === "contact"
-                    ? "Bel of mail de klant en leg het contact vast."
+                    ? "Bel of stuur WhatsApp. De status verandert pas als je Klant gecontacteerd drukt."
                     : poort.uitleg}
                 </p>
-                <div className="mt-3">
+                <div className="mt-3 flex flex-col gap-2 sm:flex-row">
                   {poort.soort === "contact" ? (
-                    <Button
-                      type="button"
-                      className="w-full sm:w-auto"
-                      onClick={() => void openContact()}
-                    >
-                      {poort.ctaLabel || "Contact opnemen"}
-                    </Button>
+                    <>
+                      <Button
+                        type="button"
+                        variant="outline"
+                        className="w-full sm:w-auto"
+                        onClick={() => setContactOpen(true)}
+                      >
+                        Bel / WhatsApp
+                      </Button>
+                      <Button
+                        type="button"
+                        className="w-full sm:w-auto"
+                        disabled={busy === "status"}
+                        onClick={() => void setWerkStatus("afspraak_inplannen")}
+                      >
+                        {busy === "status" ? "Bezig…" : "Klant gecontacteerd"}
+                      </Button>
+                    </>
                   ) : null}
                   {poort.soort === "afspraak" ? (
                     <Button
@@ -1061,14 +1125,30 @@ export function WarmtefondsOrderDetailPage() {
         </div>
       </main>
 
-      {contactOpen ? (
+      <WarmtefondsContactPopup
+        open={contactOpen}
+        onOpenChange={setContactOpen}
+        klantNaam={klantNaam}
+        telefoon={lead?.telefoon}
+        medewerkerNaam={operatorNaam}
+        afspraakAt={order.warmtefonds_afspraak_at}
+        onBel={() => void logContactPoging()}
+        onWhatsapp={() => {
+          // Alleen contactpoging bijhouden. Datum in het bericht plant
+          // geen WF-afspraak — dat gaat via “Maak WF afspraak”.
+          void logContactPoging();
+        }}
+      />
+
+      {mailOpen ? (
         <WarmtefondsContactMail
           token={token}
           projectId={order.id}
           projectNummer={order.project_nummer}
           lead={lead}
+          afspraakAt={order.warmtefonds_afspraak_at}
           onClose={() => {
-            setContactOpen(false);
+            setMailOpen(false);
             void load();
           }}
         />
@@ -1211,15 +1291,19 @@ export function WarmtefondsOrderDetailPage() {
           </div>
           <div className="mx-auto w-full max-w-xl flex-1 overflow-y-auto px-5 py-6">
             <p className="mb-5 text-sm text-muted">
-              Kies datum en tijd. (Klantmails zijn tijdelijk uitgeschakeld.)
+              Kies datum en tijd. Daarna kun je de WhatsApp-bevestiging sturen.
+              (Bevestigingsmail volgt later bij deploy.)
             </p>
             <WarmtefondsAfspraakForm
               token={token}
               projectId={order.id}
               huidige={order.warmtefonds_afspraak_at}
-              onKlaar={(bericht) => {
+              klantNaam={lead?.naam || order.titel}
+              telefoon={lead?.telefoon}
+              medewerkerNaam={operatorNaam}
+              onKlaar={(bericht, opts) => {
                 setOkMsg(bericht);
-                setAfspraakOpen(false);
+                if (opts?.sluiten) setAfspraakOpen(false);
                 void load();
               }}
             />

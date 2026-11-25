@@ -2,26 +2,21 @@ import { NextRequest, NextResponse } from "next/server";
 import { hashPassword, verifyPassword } from "@/lib/auth-password";
 import { errMessage } from "@/lib/errors";
 import { leesEdergyTariefVoorOperator } from "@/lib/edergy-tarief";
-import { resolveWarmtefondsOperator } from "@/lib/warmtefonds-portal";
+import { requireWarmtefondsPortalOperator } from "@/lib/warmtefonds-portal-guard";
 import { getSupabaseAdmin } from "@/lib/supabase";
 
 export const runtime = "nodejs";
 
 /** GET — account + tarief van deze WF-persoon. */
 export async function GET(
-  _req: NextRequest,
+  req: NextRequest,
   ctx: { params: Promise<{ token: string }> }
 ) {
   const { token } = await ctx.params;
   try {
-    const sb = getSupabaseAdmin();
-    const operator = await resolveWarmtefondsOperator(sb, token);
-    if (!operator) {
-      return NextResponse.json(
-        { error: "Portaal niet gevonden" },
-        { status: 404 }
-      );
-    }
+    const access = await requireWarmtefondsPortalOperator(req, token);
+    if ("error" in access) return access.error;
+    const operator = access.operator;
     const tarief = await leesEdergyTariefVoorOperator(operator.tarief_inc);
     return NextResponse.json({
       operator: {
@@ -78,14 +73,10 @@ export async function PATCH(
   }
 
   try {
+    const access = await requireWarmtefondsPortalOperator(req, token);
+    if ("error" in access) return access.error;
+    const operator = access.operator;
     const sb = getSupabaseAdmin();
-    const operator = await resolveWarmtefondsOperator(sb, token);
-    if (!operator) {
-      return NextResponse.json(
-        { error: "Portaal niet gevonden" },
-        { status: 404 }
-      );
-    }
 
     const { data: row, error: readErr } = await sb
       .from("warmtefonds_operators")

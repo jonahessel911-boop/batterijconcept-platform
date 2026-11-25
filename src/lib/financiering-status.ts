@@ -36,7 +36,6 @@ export type FinancieringStatus =
 /** Actieve pipeline-stappen (zonder afgewezen / legacy). */
 export const FINANCIERING_PIPELINE: FinancieringStatus[] = [
   "doorgestuurd_naar_edwin",
-  "documenten_aanleveren",
   "contact_verstuurd",
   "in_behandeling",
   "aanbod_ondertekenen",
@@ -97,6 +96,7 @@ export function normalizeFinancieringStatus(
 ): FinancieringStatus | null {
   if (!status) return null;
   if (status === "afspraak_ingepland") return "doorgestuurd_naar_edwin";
+  if (status === "documenten_aanleveren") return "doorgestuurd_naar_edwin";
   if (status === "aanvraag_gedaan") return "in_behandeling";
   if (status === "aanvraag_goedgekeurd") return "aanbod_ondertekenen";
   if (isFinancieringStatus(status)) return status;
@@ -171,7 +171,7 @@ export const FINANCIERING_STATUS_TAAK: Partial<
   },
   aanvraag_goedgekeurd: {
     autoKeySuffix: "restantfactuur",
-    titel: "Restantfactuur Warmtefonds (max. € 8.500) opstellen en versturen",
+    titel: "Restantfactuur Warmtefonds opstellen en versturen",
     afdeling: "Backoffice",
     dueDays: 1,
   },

@@ -174,21 +174,39 @@ export async function ensureWarmtefondsOperatorForPerson(
   }
 
   const { randomBytes } = await import("crypto");
+  const { generatePassword, hashPassword } = await import("@/lib/auth-password");
   const portal_token = randomBytes(24).toString("hex");
-  const { data, error } = await sb
+  const password = generatePassword(12);
+  const insertRow: Record<string, unknown> = {
+    naam,
+    email,
+    telefoon: opts.telefoon?.trim() || null,
+    portal_token,
+    actief: true,
+    password_hash: hashPassword(password),
+  };
+  let { data, error } = await sb
     .from("warmtefonds_operators")
-    .insert({
-      naam,
-      email,
-      telefoon: opts.telefoon?.trim() || null,
-      portal_token,
-      actief: true,
-    })
+    .insert(insertRow)
     .select("id, naam, email, telefoon, actief, portal_token")
     .single();
+  if (
+    error &&
+    (error.code === "42703" || error.message?.includes("password_hash"))
+  ) {
+    delete insertRow.password_hash;
+    ({ data, error } = await sb
+      .from("warmtefonds_operators")
+      .insert(insertRow)
+      .select("id, naam, email, telefoon, actief, portal_token")
+      .single());
+  }
   if (error || !data) {
     console.error("ensureWarmtefondsOperatorForPerson:", error?.message);
     return null;
+  }
+  if (insertRow.password_hash) {
+    void verstuurWarmtefondsAccountInvite({ naam, email, password });
   }
   return data as WarmtefondsOperator;
 }
@@ -201,7 +219,8 @@ export const WF_PORTAL_PROJECT_SELECT = `
   backoffice_notitie, hold_sales_deadline_at, created_at, updated_at,
   leads(
     id, naam, email, telefoon, lead_number,
-    postcode, huisnummer, toevoeging, straat, plaats, notities
+    postcode, huisnummer, toevoeging, straat, plaats, notities,
+    adviseur_id, adviseurs!adviseur_id(id, naam)
   ),
   offertes(
     id, offerte_nummer, status, ondertekend_op, financiering_voorbehoud,
@@ -217,7 +236,8 @@ export const WF_PORTAL_PROJECT_SELECT_MIN = `
   notities, created_at, updated_at,
   leads(
     id, naam, email, telefoon, lead_number,
-    postcode, huisnummer, toevoeging, straat, plaats, notities
+    postcode, huisnummer, toevoeging, straat, plaats, notities,
+    adviseur_id, adviseurs!adviseur_id(id, naam)
   ),
   offertes(
     id, offerte_nummer, status, ondertekend_op, financiering_voorbehoud,

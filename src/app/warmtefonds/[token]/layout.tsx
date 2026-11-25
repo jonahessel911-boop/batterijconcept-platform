@@ -2,8 +2,10 @@ import type { ReactNode } from "react";
 
 /**
  * Voorkomt horizontale “half-swipe” op telefoon (iOS overscroll / body-pan).
+ * Auth zit op de API + loginpagina — geen redirect hier, die veroorzaakte
+ * een refresh-lus (login → portaal → login).
  */
-export default function WarmtefondsTokenLayout({
+export default async function WarmtefondsTokenLayout({
   children,
 }: {
   children: ReactNode;

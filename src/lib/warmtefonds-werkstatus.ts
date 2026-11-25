@@ -52,7 +52,7 @@ export const WF_WERK_LABEL: Record<WfWerkStatus, string> = {
 /** Korte uitleg per stap — wat jij doet / wat het systeem doet. */
 export const WF_WERK_STAP_UITLEG: Record<WfWerkStatus, string> = {
   afwachten_contact:
-    "Bel of mail de klant. Markeer contact → status wordt Afspraak inplannen.",
+    "Bel of WhatsApp de klant. Status verandert pas met “Klant gecontacteerd”.",
   afspraak_inplannen:
     "Plan de WF-afspraak → status Afspraak ingepland. (Klantmail tijdelijk uit.)",
   afspraak_ingepland:
@@ -106,7 +106,7 @@ export function poortVoorWerkStatus(status: WfWerkStatus | null): {
       volgende: "afspraak_inplannen",
       titel: "Contact met de klant",
       uitleg: WF_WERK_STAP_UITLEG.afwachten_contact,
-      ctaLabel: "Contact opnemen",
+      ctaLabel: "Klant gecontacteerd",
     };
   }
   if (status === "afspraak_inplannen") {

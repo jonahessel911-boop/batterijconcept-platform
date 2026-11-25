@@ -3,6 +3,12 @@
 import { useMemo, useState } from "react";
 import { formatInTimeZone } from "date-fns-tz";
 import { AMSTERDAM_TZ, formatDateTimeNl } from "@/lib/format";
+import { Button } from "@/components/ui/button";
+import {
+  buildWfWhatsappBericht,
+  formatTelefoonPlus31,
+  warmtefondsWhatsappUrl,
+} from "@/lib/warmtefonds-whatsapp";
 
 function berichtVan(bevestiging: string | null | undefined): string {
   if (bevestiging === "verzonden") {
@@ -37,12 +43,18 @@ export function WarmtefondsAfspraakForm({
   token,
   projectId,
   huidige,
+  klantNaam,
+  telefoon,
+  medewerkerNaam,
   onKlaar,
 }: {
   token: string;
   projectId: string;
   huidige?: string | null;
-  onKlaar: (bericht: string) => void;
+  klantNaam?: string | null;
+  telefoon?: string | null;
+  medewerkerNaam?: string | null;
+  onKlaar: (bericht: string, opts?: { sluiten?: boolean }) => void;
 }) {
   const init = splitIso(huidige);
   const [datum, setDatum] = useState(init.datum);
@@ -74,7 +86,9 @@ export function WarmtefondsAfspraakForm({
       );
       const data = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(data.error || "Opslaan mislukt");
-      onKlaar(iso ? berichtVan(data.bevestiging) : ok);
+      onKlaar(iso ? berichtVan(data.bevestiging) : ok, {
+        sluiten: !iso,
+      });
     } catch (e) {
       setError(e instanceof Error ? e.message : "Opslaan mislukt");
     } finally {
@@ -148,8 +162,63 @@ export function WarmtefondsAfspraakForm({
         onClick={() => void bevestig()}
         className="w-full bg-green px-4 py-3 text-sm font-semibold text-white hover:bg-green-dark disabled:opacity-60 sm:w-auto"
       >
-        {busy ? "Bezig…" : "Maak WF afspraak"}
+        {busy ? "Bezig…" : huidige ? "Afspraak bijwerken" : "Maak WF afspraak"}
       </button>
+
+      {huidige ? (
+        <WhatsappBevestigingKnop
+          klantNaam={klantNaam}
+          telefoon={telefoon}
+          medewerkerNaam={medewerkerNaam}
+          afspraakIso={huidige}
+        />
+      ) : null}
+    </div>
+  );
+}
+
+function WhatsappBevestigingKnop({
+  klantNaam,
+  telefoon,
+  medewerkerNaam,
+  afspraakIso,
+}: {
+  klantNaam?: string | null;
+  telefoon?: string | null;
+  medewerkerNaam?: string | null;
+  afspraakIso: string;
+}) {
+  const nummer = formatTelefoonPlus31(telefoon);
+  const url = warmtefondsWhatsappUrl(
+    telefoon,
+    buildWfWhatsappBericht({
+      templateId: "afspraak_bevestiging",
+      klantNaam,
+      medewerkerNaam,
+      afspraakIso,
+    })
+  );
+
+  if (!url || !nummer) {
+    return (
+      <p className="text-xs text-[#C45A12]">
+        Geen geldig telefoonnummer voor WhatsApp-bevestiging.
+      </p>
+    );
+  }
+
+  return (
+    <div className="space-y-1.5 border-t border-line pt-4">
+      <p className="text-xs text-muted">
+        Afspraak staat. Stuur handmatig de bevestiging via WhatsApp.
+      </p>
+      <Button
+        type="button"
+        className="w-full bg-[#128C7E] hover:bg-[#0E6F64] sm:w-auto"
+        onClick={() => window.open(url, "_blank", "noopener,noreferrer")}
+      >
+        WhatsApp-bevestiging
+      </Button>
     </div>
   );
 }

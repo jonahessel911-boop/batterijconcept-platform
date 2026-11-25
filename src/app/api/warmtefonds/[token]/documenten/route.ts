@@ -4,8 +4,8 @@ import { errMessage } from "@/lib/errors";
 import {
   isMissingWfProjectColumn,
   isWarmtefondsPortalProject,
-  resolveWarmtefondsOperator,
 } from "@/lib/warmtefonds-portal";
+import { requireWarmtefondsPortalOperator } from "@/lib/warmtefonds-portal-guard";
 
 export const runtime = "nodejs";
 
@@ -67,16 +67,14 @@ function chunk<T>(items: T[], size: number): T[][] {
 
 /** GET /api/warmtefonds/[token]/documenten — offerte + facturen van de aanvragen. */
 export async function GET(
-  _req: NextRequest,
+  req: NextRequest,
   ctx: { params: Promise<{ token: string }> }
 ) {
   const { token } = await ctx.params;
   try {
+    const access = await requireWarmtefondsPortalOperator(req, token);
+    if ("error" in access) return access.error;
     const sb = getSupabaseAdmin();
-    const operator = await resolveWarmtefondsOperator(sb, token);
-    if (!operator) {
-      return NextResponse.json({ error: "Portaal niet gevonden" }, { status: 404 });
-    }
 
     const primary = await sb
       .from("projecten")

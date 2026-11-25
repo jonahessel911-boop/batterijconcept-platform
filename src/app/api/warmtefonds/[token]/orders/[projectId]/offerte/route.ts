@@ -2,10 +2,8 @@ import { NextRequest, NextResponse } from "next/server";
 import { getSupabaseAdmin } from "@/lib/supabase";
 import { errMessage } from "@/lib/errors";
 import { buildOffertePdfForId } from "@/lib/offerte-pdf-build";
-import {
-  isWarmtefondsPortalProject,
-  resolveWarmtefondsOperator,
-} from "@/lib/warmtefonds-portal";
+import { isWarmtefondsPortalProject } from "@/lib/warmtefonds-portal";
+import { requireWarmtefondsPortalOperator } from "@/lib/warmtefonds-portal-guard";
 
 export const runtime = "nodejs";
 
@@ -14,19 +12,14 @@ export const runtime = "nodejs";
  * Offerte-PDF (concept of ondertekend) voor de operator via portaal-token.
  */
 export async function GET(
-  _req: NextRequest,
+  req: NextRequest,
   ctx: { params: Promise<{ token: string; projectId: string }> }
 ) {
   const { token, projectId } = await ctx.params;
   try {
+    const access = await requireWarmtefondsPortalOperator(req, token);
+    if ("error" in access) return access.error;
     const sb = getSupabaseAdmin();
-    const operator = await resolveWarmtefondsOperator(sb, token);
-    if (!operator) {
-      return NextResponse.json(
-        { error: "Portaal niet gevonden" },
-        { status: 404 }
-      );
-    }
 
     const { data: order, error: oErr } = await sb
       .from("projecten")

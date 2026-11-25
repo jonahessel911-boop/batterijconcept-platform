@@ -18,6 +18,7 @@ import {
   MessageCircle,
   Phone,
   Search,
+  LogOut,
   User,
   X,
 } from "lucide-react";
@@ -49,9 +50,9 @@ import {
 import type { PortalBetalingSamenvatting } from "@/lib/warmtefonds-portal";
 import {
   WF_WHATSAPP_TEMPLATES,
+  buildWfWhatsappBericht,
   warmtefondsWhatsappPhone,
   warmtefondsWhatsappUrl,
-  warmtefondsWhatsappVoornaam,
   type WfWhatsappTemplateId,
 } from "@/lib/warmtefonds-whatsapp";
 
@@ -712,20 +713,30 @@ export function WarmtefondsPortalPage() {
     );
   }
 
-  const load = useCallback(async () => {
+  const load = useCallback(async (signal?: AbortSignal) => {
     setLoading(true);
     setError(null);
     try {
-      const res = await fetch(`/api/warmtefonds/${token}`);
+      const res = await fetch(`/api/warmtefonds/${token}`, {
+        credentials: "include",
+        signal,
+      });
+      if (res.status === 401) {
+        setError("Niet ingelogd — open /warmtefonds/login.");
+        return;
+      }
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || "Niet gevonden");
       setOperatorNaam(data.operator?.naam || "");
       setOrders(data.orders || []);
       setArchiefOrders(data.archief || []);
     } catch (e) {
+      if (signal?.aborted) return;
+      const name = e instanceof Error ? e.name : "";
+      if (name === "AbortError") return;
       setError(e instanceof Error ? e.message : "Fout");
     } finally {
-      setLoading(false);
+      if (!signal?.aborted) setLoading(false);
     }
   }, [token]);
 
@@ -786,8 +797,9 @@ export function WarmtefondsPortalPage() {
   }
 
   useEffect(() => {
-    const id = requestAnimationFrame(() => void load());
-    return () => cancelAnimationFrame(id);
+    const ac = new AbortController();
+    void load(ac.signal);
+    return () => ac.abort();
   }, [load]);
 
   useEffect(() => {
@@ -1039,7 +1051,7 @@ export function WarmtefondsPortalPage() {
       const order = data.order;
       if (order) {
         zetStap(id, {
-          financiering_status: order.financiering_status ?? "contact_verstuurd",
+          financiering_status: order.financiering_status ?? null,
           warmtefonds_contact_pogingen:
             order.warmtefonds_contact_pogingen ?? null,
         });
@@ -1047,7 +1059,6 @@ export function WarmtefondsPortalPage() {
         const cur = orders.find((o) => o.id === id);
         const prev = Number(cur?.warmtefonds_contact_pogingen || 0);
         zetStap(id, {
-          financiering_status: "contact_verstuurd",
           warmtefonds_contact_pogingen: prev + 1,
         });
       }
@@ -1205,7 +1216,9 @@ export function WarmtefondsPortalPage() {
                   <p className="truncate text-[15px] font-semibold text-ink">
                     {operatorNaam || "Warmtefonds-adviseur"}
                   </p>
-                  <p className="text-[12px] text-muted">Ingelogd via portaal</p>
+                  <p className="text-[12px] text-muted">
+                    Ingelogd met e-mail + wachtwoord
+                  </p>
                 </div>
               </div>
 
@@ -1318,6 +1331,20 @@ export function WarmtefondsPortalPage() {
                 </div>
               </div>
             </div>
+            <button
+              type="button"
+              onClick={() => {
+                void fetch("/api/warmtefonds/auth/login", {
+                  method: "DELETE",
+                }).finally(() => {
+                  window.location.href = "/warmtefonds/login";
+                });
+              }}
+              className="mt-4 inline-flex w-full items-center justify-center gap-2 border border-line bg-white px-4 py-2.5 text-sm font-semibold text-ink hover:bg-wash"
+            >
+              <LogOut className="h-4 w-4" aria-hidden />
+              Uitloggen
+            </button>
           </div>
         ) : (
           <>
@@ -1656,15 +1683,19 @@ export function WarmtefondsPortalPage() {
           </div>
           <div className="mx-auto w-full max-w-xl flex-1 overflow-y-auto px-5 py-4">
             <p className="mb-4 text-sm text-muted">
-              Kies datum en tijd. (Klantmails zijn tijdelijk uitgeschakeld.)
+              Kies datum en tijd. Daarna kun je de WhatsApp-bevestiging sturen.
+              (Bevestigingsmail volgt later bij deploy.)
             </p>
             <WarmtefondsAfspraakForm
               token={token}
               projectId={afspraakOrder.id}
               huidige={afspraakOrder.warmtefonds_afspraak_at}
-              onKlaar={(bericht) => {
+              klantNaam={leadOf(afspraakOrder)?.naam || afspraakOrder.titel}
+              telefoon={leadOf(afspraakOrder)?.telefoon}
+              medewerkerNaam={operatorNaam}
+              onKlaar={(bericht, opts) => {
                 setAfspraakMsg(bericht);
-                setAfspraakId(null);
+                if (opts?.sluiten) setAfspraakId(null);
                 void load();
               }}
             />
@@ -1677,6 +1708,7 @@ export function WarmtefondsPortalPage() {
           projectId={contactOrder.id}
           projectNummer={contactOrder.project_nummer}
           lead={leadOf(contactOrder)}
+          afspraakAt={contactOrder.warmtefonds_afspraak_at}
           onClose={() => {
             setContactId(null);
             void load();
@@ -2173,16 +2205,14 @@ function WfWhatsappTemplateDialog({
   if (!target) return null;
 
   const phone = warmtefondsWhatsappPhone(target.telefoon);
-  const voornaam = warmtefondsWhatsappVoornaam(target.naam);
-  const afspraakLabel = target.afspraakAt
-    ? formatDateTimeNl(target.afspraakAt)
-    : null;
 
   function openWhatsapp() {
     if (!selected || !phone) return;
-    const tpl = WF_WHATSAPP_TEMPLATES.find((t) => t.id === selected);
-    if (!tpl) return;
-    const bericht = tpl.build({ voornaam, afspraakLabel });
+    const bericht = buildWfWhatsappBericht({
+      templateId: selected,
+      klantNaam: target.naam,
+      afspraakIso: target.afspraakAt || null,
+    });
     const url = warmtefondsWhatsappUrl(target!.telefoon, bericht);
     if (!url) return;
     window.open(url, "_blank", "noopener,noreferrer");

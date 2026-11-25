@@ -2,6 +2,11 @@
 
 import { useEffect, useState } from "react";
 import { adresRegel } from "@/lib/format";
+import {
+  splitWfAfspraakLocal,
+  warmtefondsAfspraakWhatsappLabel,
+  wfAfspraakIsoVanDatumTijd,
+} from "@/lib/warmtefonds-whatsapp";
 
 type Template = {
   id: string;
@@ -45,12 +50,14 @@ export function WarmtefondsContactMail({
   projectId,
   projectNummer,
   lead,
+  afspraakAt = null,
   onClose,
 }: {
   token: string;
   projectId: string;
   projectNummer: string;
   lead: Lead | null;
+  afspraakAt?: string | null;
   onClose: () => void;
 }) {
   const [templates, setTemplates] = useState<Template[]>([]);
@@ -60,9 +67,42 @@ export function WarmtefondsContactMail({
   const [to, setTo] = useState(lead?.email?.trim() || "");
   const [subject, setSubject] = useState(onderwerpVan(projectNummer));
   const [bericht, setBericht] = useState(`${groet}\n\n`);
+  const initAfspraak = splitWfAfspraakLocal(afspraakAt);
+  const [datum, setDatum] = useState(initAfspraak.datum);
+  const [tijd, setTijd] = useState(initAfspraak.tijd);
+  const [tplId, setTplId] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [ok, setOk] = useState<string | null>(null);
+  const adres = lead ? adresRegel(lead) : "";
+
+  function pasTemplateToe(
+    id: string,
+    volgendeDatum?: string,
+    volgendeTijd?: string
+  ) {
+    const t = templates.find((x) => x.id === id);
+    setSubject(onderwerpVan(projectNummer));
+    if (!t) {
+      setBericht(`${groet}\n\n`);
+      return;
+    }
+    const iso = wfAfspraakIsoVanDatumTijd(
+      volgendeDatum ?? datum,
+      volgendeTijd ?? tijd
+    );
+    const afspraak = iso ? warmtefondsAfspraakWhatsappLabel(iso) : "";
+    const ingevuld = vulBericht(t.bericht, {
+      voornaam,
+      naam,
+      project: projectNummer,
+      afspraak,
+      adres: adres && adres !== "—" ? adres : "",
+    })
+      .replace(/^\s*beste\b[^\n]*/i, "")
+      .trim();
+    setBericht(ingevuld ? `${groet}\n\n${ingevuld}` : `${groet}\n\n`);
+  }
 
   useEffect(() => {
     let cancelled = false;
@@ -98,8 +138,6 @@ export function WarmtefondsContactMail({
       setBusy(false);
     }
   }
-
-  const adres = lead ? adresRegel(lead) : "";
 
   return (
     <div
@@ -145,27 +183,42 @@ export function WarmtefondsContactMail({
               className="mt-1 w-full border border-line px-3 py-2 text-sm outline-none focus:border-green"
             />
           </label>
+          <div className="grid grid-cols-2 gap-2">
+            <label className="block text-xs font-semibold text-ink">
+              Datum afspraak
+              <input
+                type="date"
+                value={datum}
+                onChange={(e) => {
+                  const next = e.target.value;
+                  setDatum(next);
+                  if (tplId) pasTemplateToe(tplId, next, tijd);
+                }}
+                className="mt-1 w-full border border-line bg-white px-3 py-2 text-sm font-normal outline-none focus:border-green"
+              />
+            </label>
+            <label className="block text-xs font-semibold text-ink">
+              Tijd
+              <input
+                type="time"
+                value={tijd}
+                onChange={(e) => {
+                  const next = e.target.value;
+                  setTijd(next);
+                  if (tplId) pasTemplateToe(tplId, datum, next);
+                }}
+                className="mt-1 w-full border border-line bg-white px-3 py-2 text-sm font-normal outline-none focus:border-green"
+              />
+            </label>
+          </div>
           <label className="block text-xs font-semibold text-ink">
             Template
             <select
-              defaultValue=""
+              value={tplId}
               onChange={(e) => {
-                const t = templates.find((x) => x.id === e.target.value);
-                setSubject(onderwerpVan(projectNummer));
-                if (!t) {
-                  setBericht(`${groet}\n\n`);
-                  return;
-                }
-                const ingevuld = vulBericht(t.bericht, {
-                  voornaam,
-                  naam,
-                  project: projectNummer,
-                  afspraak: "",
-                  adres: adres && adres !== "—" ? adres : "",
-                })
-                  .replace(/^\s*beste\b[^\n]*/i, "")
-                  .trim();
-                setBericht(ingevuld ? `${groet}\n\n${ingevuld}` : `${groet}\n\n`);
+                const id = e.target.value;
+                setTplId(id);
+                pasTemplateToe(id);
               }}
               className="mt-1 w-full border border-line bg-white px-3 py-2 text-sm outline-none focus:border-green"
             >
