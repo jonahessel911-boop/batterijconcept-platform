@@ -531,17 +531,16 @@ export async function POST(req: NextRequest) {
     let portalUrl: string | null = null;
     if (rol === "warmtefonds") {
       try {
-        const { ensureWarmtefondsOperatorForPerson } = await import(
-          "@/lib/warmtefonds-portal"
-        );
+        const {
+          ensureWarmtefondsOperatorForPerson,
+          warmtefondsLoginUrl,
+        } = await import("@/lib/warmtefonds-portal");
         const op = await ensureWarmtefondsOperatorForPerson(sb, {
           naam,
           email,
           telefoon: body.telefoon?.trim() || null,
         });
-        if (op?.portal_token) {
-          portalUrl = `${appBaseUrl()}/warmtefonds/${op.portal_token}`;
-        }
+        if (op) portalUrl = warmtefondsLoginUrl();
       } catch (wfErr) {
         console.error("warmtefonds-operator aanmaken mislukt:", wfErr);
       }
@@ -689,9 +688,10 @@ export async function PATCH(req: NextRequest) {
         );
       }
 
+      const password_hash = hashPassword(password);
       const { data, error } = await sb
         .from("adviseurs")
-        .update({ password_hash: hashPassword(password) })
+        .update({ password_hash })
         .eq("id", body.id)
         .select(ADVISEUR_PUBLIC)
         .single();
@@ -706,6 +706,16 @@ export async function PATCH(req: NextRequest) {
           },
           { status: 500 }
         );
+      }
+
+      const wfEmail = String(data.email || "")
+        .trim()
+        .toLowerCase();
+      if (wfEmail) {
+        await sb
+          .from("warmtefonds_operators")
+          .update({ password_hash })
+          .ilike("email", wfEmail);
       }
 
       return NextResponse.json({ adviseur: data, password_updated: true });
@@ -1098,9 +1108,10 @@ export async function PATCH(req: NextRequest) {
     );
     if (nextRol === "warmtefonds") {
       try {
-        const { ensureWarmtefondsOperatorForPerson } = await import(
-          "@/lib/warmtefonds-portal"
-        );
+        const {
+          ensureWarmtefondsOperatorForPerson,
+          warmtefondsLoginUrl,
+        } = await import("@/lib/warmtefonds-portal");
         const row = data as {
           naam?: string;
           email?: string | null;
@@ -1111,8 +1122,8 @@ export async function PATCH(req: NextRequest) {
           email: (row.email || "").trim().toLowerCase(),
           telefoon: row.telefoon ?? null,
         });
-        if (op?.portal_token) {
-          portalUrl = `${appBaseUrl()}/warmtefonds/${op.portal_token}`;
+        if (op) {
+          portalUrl = warmtefondsLoginUrl();
         }
       } catch (wfErr) {
         console.error("warmtefonds-operator sync mislukt:", wfErr);

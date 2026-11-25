@@ -8,7 +8,12 @@ import {
   sessionCookieOptions,
   verifySessionToken,
 } from "@/lib/auth-session";
-import { normalizeRol } from "@/lib/rollen";
+import { isWarmtefondsTeamAdviseur, normalizeRol } from "@/lib/rollen";
+import {
+  createWarmtefondsSessionToken,
+  warmtefondsSessionCookieOptions,
+} from "@/lib/warmtefonds-auth";
+import { ensureWarmtefondsOperatorForPerson } from "@/lib/warmtefonds-portal";
 
 export const runtime = "nodejs";
 
@@ -78,13 +83,52 @@ export async function POST(req: NextRequest) {
       );
     }
 
+    const email = target.email.trim().toLowerCase();
+
+    // WF-operator: CRM heeft geen schermen. Open het portaal als deze persoon.
+    if (isWarmtefondsTeamAdviseur(target)) {
+      const op = await ensureWarmtefondsOperatorForPerson(sb, {
+        naam: target.naam,
+        email,
+      });
+      const portalToken = String(op?.portal_token || "");
+      if (!op || portalToken.length < 16) {
+        return NextResponse.json(
+          {
+            error:
+              "Geen Warmtefonds-portaal voor dit account. Stuur eerst een loginmail.",
+          },
+          { status: 400 }
+        );
+      }
+      const wfToken = await createWarmtefondsSessionToken({
+        operatorId: op.id,
+        naam: op.naam,
+        email,
+        portalToken,
+      });
+      const redirect = `/warmtefonds/${portalToken}`;
+      const res = NextResponse.json({
+        ok: true,
+        adviseur: {
+          id: target.id,
+          naam: target.naam,
+          email,
+          rol: "warmtefonds",
+        },
+        redirect,
+      });
+      res.cookies.set(warmtefondsSessionCookieOptions(wfToken));
+      return res;
+    }
+
     // DB-rol respecteren (beller ziet alleen leads + bellen)
     const rol = normalizeRol(target.rol || "adviseur");
 
     const token = await createSessionToken({
       adviseurId: target.id,
       naam: target.naam,
-      email: target.email.trim(),
+      email,
       rol,
       impersonatorId: session.adviseurId,
       impersonatorNaam: session.naam,
@@ -97,7 +141,7 @@ export async function POST(req: NextRequest) {
       adviseur: {
         id: target.id,
         naam: target.naam,
-        email: target.email.trim(),
+        email,
         rol,
       },
       impersonating: {

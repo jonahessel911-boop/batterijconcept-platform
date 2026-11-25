@@ -96,10 +96,25 @@ export async function POST(req: NextRequest) {
       );
     }
     if (!verifyPassword(password, String(op.password_hash))) {
-      return NextResponse.json(
-        { error: "Onjuiste e-mail of wachtwoord" },
-        { status: 401 }
-      );
+      // CRM “Zet wachtwoord” schreef vroeger alleen adviseurs.password_hash.
+      const { data: adviseur } = await sb
+        .from("adviseurs")
+        .select("id, password_hash")
+        .ilike("email", email)
+        .maybeSingle();
+      const crmHash = adviseur?.password_hash
+        ? String(adviseur.password_hash)
+        : "";
+      if (!crmHash || !verifyPassword(password, crmHash)) {
+        return NextResponse.json(
+          { error: "Onjuiste e-mail of wachtwoord" },
+          { status: 401 }
+        );
+      }
+      await sb
+        .from("warmtefonds_operators")
+        .update({ password_hash: crmHash })
+        .eq("id", op.id);
     }
 
     const portalToken = String(op.portal_token || "");

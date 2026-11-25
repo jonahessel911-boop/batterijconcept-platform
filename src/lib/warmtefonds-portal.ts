@@ -154,11 +154,38 @@ export async function ensureWarmtefondsOperatorForPerson(
   const email = opts.email.trim().toLowerCase();
   if (!naam || !email) return null;
 
+  const selectCols = "id, naam, email, telefoon, actief, portal_token";
   const { data: existing } = await sb
     .from("warmtefonds_operators")
-    .select("id, naam, email, telefoon, actief, portal_token")
+    .select(selectCols)
     .eq("email", email)
     .maybeSingle();
+  if (existing && existing.actief !== false) {
+    const { data: updated } = await sb
+      .from("warmtefonds_operators")
+      .update({
+        naam,
+        telefoon: opts.telefoon?.trim() || existing.telefoon || null,
+        actief: true,
+      })
+      .eq("id", existing.id)
+      .select(selectCols)
+      .single();
+    return (updated || existing) as WarmtefondsOperator;
+  }
+
+  // Zelfde naam, al een actief portaal → geen tweede Edwin.
+  const { data: naamHits } = await sb
+    .from("warmtefonds_operators")
+    .select(selectCols)
+    .eq("actief", true)
+    .ilike("naam", naam)
+    .limit(8);
+  const sameNaam = (naamHits || []).find(
+    (o) => o.naam.trim().toLowerCase() === naam.toLowerCase()
+  );
+  if (sameNaam) return sameNaam as WarmtefondsOperator;
+
   if (existing) {
     const { data: updated } = await sb
       .from("warmtefonds_operators")
@@ -168,7 +195,7 @@ export async function ensureWarmtefondsOperatorForPerson(
         actief: true,
       })
       .eq("id", existing.id)
-      .select("id, naam, email, telefoon, actief, portal_token")
+      .select(selectCols)
       .single();
     return (updated || existing) as WarmtefondsOperator;
   }

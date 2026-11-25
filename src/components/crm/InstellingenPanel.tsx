@@ -14,6 +14,7 @@ import { PartnerTeamgenotenPanel } from "@/components/installatie/PartnerTeamgen
 import {
   TEAM_ROLLEN,
   gebruikerRolLabel,
+  isWarmtefondsTeamAdviseur,
   normalizeRol,
   teamRolUitleg,
   type GebruikerRol,
@@ -870,7 +871,11 @@ export function InstellingenPanel({
         );
       }
       clearCrmShellCache();
-      window.location.href = "/";
+      const redirect =
+        typeof data.redirect === "string" && data.redirect.startsWith("/")
+          ? data.redirect
+          : "/";
+      window.location.href = redirect;
     } catch (err) {
       setError(err instanceof Error ? err.message : "Fout");
       setLoginAlsId(null);
@@ -1556,7 +1561,9 @@ export function InstellingenPanel({
                   title={
                     !selectedAdviseur.email
                       ? "Geen e-mailadres"
-                      : "Bekijk CRM als deze gebruiker"
+                      : isWarmtefondsTeamAdviseur(selectedAdviseur)
+                        ? "Open het Warmtefonds-portaal als deze gebruiker"
+                        : "Bekijk CRM als deze gebruiker"
                   }
                 >
                   {loginAlsId === selectedAdviseur.id ? "Bezig…" : "Login als"}
