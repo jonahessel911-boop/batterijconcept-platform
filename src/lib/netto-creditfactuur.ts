@@ -528,7 +528,7 @@ export async function ensureAdviseurOrderCommissieConcept(
 export async function ensureNettoAanbetalingCreditfactuur(
   sb: SupabaseClient,
   factuurId: string,
-  opts?: { autoVerstuur?: boolean }
+  opts?: { autoVerstuur?: boolean; allowAnnulering?: boolean }
 ): Promise<{
   ok: boolean;
   created?: boolean;
@@ -620,6 +620,7 @@ export async function ensureNettoAanbetalingCreditfactuur(
   }
   if (
     project &&
+    !opts?.allowAnnulering &&
     (project.status === "annulering" || project.status === "geannuleerd")
   ) {
     return { ok: true, skipped: "annulering" };
@@ -1112,6 +1113,24 @@ export async function runWoensdagCommissieBatch(
       e instanceof Error
         ? `Bel/ops concepten: ${e.message}`
         : "Bel/ops concepten mislukt"
+    );
+  }
+
+  // 2c) Uitbetaalde commissie terugboeken als aanbetaling later is gecrediteerd
+  try {
+    const { ensureAanbetalingCommissieClawbacks } = await import(
+      "@/lib/aanbetaling-commissie-clawback"
+    );
+    const claw = await ensureAanbetalingCommissieClawbacks(sb, now);
+    for (const msg of claw.errors) {
+      result.verstuurd.errors.push(`Clawback: ${msg}`);
+    }
+  } catch (e) {
+    result.ok = false;
+    result.verstuurd.errors.push(
+      e instanceof Error
+        ? `Clawback: ${e.message}`
+        : "Clawback commissie mislukt"
     );
   }
 

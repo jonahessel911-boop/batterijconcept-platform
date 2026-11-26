@@ -56,6 +56,7 @@ import {
   projectHeeftGeenAanbetalingNodig,
   showProjectKickoff,
 } from "@/lib/project-kickoff";
+import { isWarmtepompOrder } from "@/lib/project-product";
 import {
   kanEmInstallatieInplannen,
   kanWfInstallatieInplannen,
@@ -606,7 +607,11 @@ export function openBelSchouwActies(
       id: `bel-schouw-${project.id}`,
       soort: "bel_schouw_aanbetaling",
       titel: belSchouwActieTitel(project),
-      detail: warmtefonds
+      detail: isWarmtepompOrder(project)
+        ? geenAanbetaling
+          ? "Opstarten: Stuur naar TC Swiss."
+          : "Opstarten: factuur versturen + Stuur naar TC Swiss."
+        : warmtefonds
         ? geenAanbetaling
           ? `Opstarten: WF-portaal + schouwweek (${schouwWeekLabel}).`
           : `Opstarten: BTW-factuur, WF-portaal, schouwweek (${schouwWeekLabel}).`
@@ -1659,6 +1664,7 @@ export function openBestelMateriaalActies(
 
   for (const project of projecten) {
     if (isProjectBuitenActies(project)) continue;
+    if (isWarmtepompOrder(project)) continue;
     if (!project.installatie_at) continue;
     if (!materiaalNogTeBestellen(project)) continue;
     if (!isSchouwweekGepland(project)) continue;
@@ -2000,7 +2006,22 @@ export function isServiceVervolgActieOpen(project: Project): boolean {
   if (isProjectBuitenActies(project)) return false;
   if (project.service_at) return false;
   const snap = parseOpleverFormulierSnapshot(project.oplever_formulier);
-  return Boolean(snap?.vervolgNodig);
+  if (snap?.vervolgNodig) return true;
+  // Fallback: service-inkoop uit opleverformulier zonder snapshot-kolom.
+  const checks = project.materiaal_checks as
+    | Record<string, unknown>
+    | null
+    | undefined;
+  const raw = checks?.__service_inkoop;
+  if (typeof raw === "string" && raw.trim() && raw.trim() !== "[]") {
+    try {
+      const parsed = JSON.parse(raw) as unknown;
+      if (Array.isArray(parsed) && parsed.length > 0) return true;
+    } catch {
+      /* ignore */
+    }
+  }
+  return false;
 }
 
 export function openServiceVervolgActies(

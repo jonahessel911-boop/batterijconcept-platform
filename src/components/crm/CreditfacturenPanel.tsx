@@ -48,6 +48,7 @@ import {
   type GebruikerRol,
 } from "@/lib/rollen";
 import type { ToekomstigeCreditfacturenPreview } from "@/lib/toekomstige-creditfacturen";
+import type { AanbetalingNaCreditRij } from "@/lib/aanbetaling-na-credit-uitbetaling";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -582,6 +583,10 @@ export function CreditfacturenPanel({
   /** Alleen aanbetalingen van de huidige week → volgende woensdag. */
   const [toekomstigVooruit, setToekomstigVooruit] =
     useState<ToekomstigeCreditfacturenPreview | null>(null);
+  const [naCreditRijen, setNaCreditRijen] = useState<AanbetalingNaCreditRij[]>(
+    []
+  );
+  const [naCreditBusyId, setNaCreditBusyId] = useState<string | null>(null);
   const [creatingConcepts, setCreatingConcepts] = useState(false);
   const [editOpen, setEditOpen] = useState(false);
   const [editRows, setEditRows] = useState<InboxRow[]>([]);
@@ -618,10 +623,11 @@ export function CreditfacturenPanel({
     setError(null);
     try {
       // Snelle first paint: alleen bestaande facturen (read-only GETs).
-      const [advRes, partRes, inboxRes] = await Promise.all([
+      const [advRes, partRes, inboxRes, naCreditRes] = await Promise.all([
         fetch("/api/adviseurs/creditfacturen"),
         fetch("/api/partners/creditfacturen"),
         fetch("/api/facturen-inbox?status=uitbetalingen"),
+        fetch("/api/adviseurs/creditfacturen/na-credit"),
       ]);
       const advData = await advRes.json().catch(() => ({}));
       const partData = await partRes.json().catch(() => ({}));
@@ -658,6 +664,15 @@ export function CreditfacturenPanel({
         );
       } else {
         setInboxFacturen([]);
+      }
+      if (naCreditRes.ok) {
+        const naData = await naCreditRes.json().catch(() => ({}));
+        setNaCreditRijen(
+          ((naData as { rijen?: AanbetalingNaCreditRij[] }).rijen ||
+            []) as AanbetalingNaCreditRij[]
+        );
+      } else {
+        setNaCreditRijen([]);
       }
     } catch (e) {
       setError(e instanceof Error ? e.message : "Laden mislukt");
@@ -1426,6 +1441,34 @@ export function CreditfacturenPanel({
       setError(e instanceof Error ? e.message : "Concepten aanmaken mislukt");
     } finally {
       setCreatingConcepts(false);
+    }
+  }
+
+  async function maakNaCreditConcept(factuurId: string) {
+    setNaCreditBusyId(factuurId);
+    setError(null);
+    setOkMsg(null);
+    try {
+      const res = await fetch("/api/adviseurs/creditfacturen/na-credit", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ factuur_id: factuurId }),
+      });
+      const json = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        throw new Error(
+          (json as { error?: string }).error || "Concept aanmaken mislukt"
+        );
+      }
+      setOkMsg("Concept-uitbetaling aangemaakt voor de gecrediteerde aanbetaling.");
+      setTab("concept_ab");
+      await loadAll();
+    } catch (e) {
+      setError(
+        e instanceof Error ? e.message : "Concept aanmaken mislukt"
+      );
+    } finally {
+      setNaCreditBusyId(null);
     }
   }
 
@@ -2437,6 +2480,106 @@ export function CreditfacturenPanel({
           );
         })}
       </div>
+
+      {naCreditRijen.length > 0 ? (
+        <Card>
+          <CardHeader className="pb-2">
+            <CardTitle className="text-base">
+              Gecrediteerd, wel betaald ({naCreditRijen.length})
+            </CardTitle>
+            <CardDescription>
+              Aanbetaling gecrediteerd, geld was wel binnen, nog geen
+              verkoperscommissie. Al uitbetaalde voorschotten gaan als
+              minbedrag op de eerstvolgende weekuitbetaling.
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="pt-0">
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead>Klant</TableHead>
+                  <TableHead>Factuur</TableHead>
+                  <TableHead>Credit</TableHead>
+                  <TableHead>Terugbetaald</TableHead>
+                  <TableHead>Betaald</TableHead>
+                  <TableHead>Adviseur</TableHead>
+                  <TableHead className="text-right" />
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {naCreditRijen.map((r) => (
+                  <TableRow key={r.factuurId}>
+                    <TableCell>
+                      <p className="text-sm font-medium">{r.klantNaam || "—"}</p>
+                      <p className="text-[11px] text-muted-foreground">
+                        {r.projectNummer || "—"}
+                        {r.projectStatus === "annulering" ||
+                        r.projectStatus === "geannuleerd"
+                          ? " · geannuleerd"
+                          : ""}
+                      </p>
+                    </TableCell>
+                    <TableCell className="font-mono text-[12px]">
+                      {r.factuurNummer}
+                      {r.reden === "vervangende_aanbetaling_betaald" ? (
+                        <span className="mt-0.5 block text-[10px] text-muted-foreground">
+                          Nieuwe aanbetaling (was {r.gecrediteerdFactuurNummer})
+                        </span>
+                      ) : null}
+                    </TableCell>
+                    <TableCell className="font-mono text-[12px] text-muted-foreground">
+                      {r.creditFactuurNummer || "—"}
+                    </TableCell>
+                    <TableCell>
+                      {r.terugbetaald ? (
+                        <Badge variant="secondary">Ja</Badge>
+                      ) : (
+                        <Badge variant="destructive">Nee</Badge>
+                      )}
+                    </TableCell>
+                    <TableCell className="text-[12px] tabular-nums">
+                      {r.betaaldOp
+                        ? formatDateShort(r.betaaldOp)
+                        : "—"}
+                      <span className="mt-0.5 block text-[11px] text-muted-foreground">
+                        {formatEuro(r.bedragInc)}
+                      </span>
+                    </TableCell>
+                    <TableCell className="text-[13px]">
+                      {r.adviseurNaam || "—"}
+                      {r.alUitbetaaldAanAdviseur ? (
+                        <span className="mt-0.5 block text-[10px] text-muted-foreground">
+                          Al in creditfactuur
+                        </span>
+                      ) : null}
+                    </TableCell>
+                    <TableCell className="text-right">
+                      {r.kanUitbetalen ? (
+                        <Button
+                          type="button"
+                          size="xs"
+                          disabled={naCreditBusyId === r.factuurId}
+                          onClick={() => void maakNaCreditConcept(r.factuurId)}
+                        >
+                          {naCreditBusyId === r.factuurId
+                            ? "Bezig…"
+                            : "Maak concept"}
+                        </Button>
+                      ) : (
+                        <span className="text-[11px] text-muted-foreground">
+                          {r.alUitbetaaldAanAdviseur
+                            ? "Uitbetaald"
+                            : "Geen commissie"}
+                        </span>
+                      )}
+                    </TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+          </CardContent>
+        </Card>
+      ) : null}
 
       {bannerPreview && tab === "concept_ab" ? (
         <Card size="sm" className="bg-wash/40 shadow-none ring-border/60">

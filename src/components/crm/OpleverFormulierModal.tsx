@@ -1,12 +1,14 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
+import { fromZonedTime } from "date-fns-tz";
 import type {
   InstallatiePartnerTeamgenoot,
   Lead,
   Project,
 } from "@/types/database";
 import { SignaturePadField } from "@/components/offerte/SignaturePadField";
+import { AMSTERDAM_TZ } from "@/lib/format";
 import {
   emptyOpleverFormulier,
   formatOpleverAdres,
@@ -42,6 +44,23 @@ function newMateriaalId(): string {
     return crypto.randomUUID();
   }
   return `svc-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+}
+
+/** Default: morgen 10:00 (Amsterdam), als datetime-local. */
+function defaultVervolgDatetimeLocal(): string {
+  const now = new Date();
+  const d = new Date(now.getTime() + 24 * 60 * 60 * 1000);
+  d.setHours(10, 0, 0, 0);
+  const pad = (n: number) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
+}
+
+function datetimeLocalToIso(value: string): string {
+  const t = value.trim();
+  if (!t) return "";
+  const d = fromZonedTime(t, AMSTERDAM_TZ);
+  if (Number.isNaN(d.getTime())) return t;
+  return d.toISOString();
 }
 
 function leadFromProject(project: Project): PrefillLead | null {
@@ -158,8 +177,24 @@ export function OpleverFormulierModal({
       setError("Kies wie de installatie heeft uitgevoerd.");
       return;
     }
+    const gekozenTg = teamgenoten.find((t) => t.id === teamgenootId);
     const payload: OpleverFormulierData = {
       ...form,
+      vervolgAt: form.vervolgNodig
+        ? datetimeLocalToIso(form.vervolgAt)
+        : "",
+      vervolgMonteurId:
+        form.vervolgNodig && gekozenTg?.kan_service === true
+          ? gekozenTg.id
+          : form.vervolgNodig
+            ? form.vervolgMonteurId
+            : "",
+      vervolgMonteurNaam:
+        form.vervolgNodig && gekozenTg?.kan_service === true
+          ? gekozenTg.naam
+          : form.vervolgNodig
+            ? form.vervolgMonteurNaam
+            : "",
       vervolgMaterialen: form.vervolgNodig
         ? (form.vervolgMaterialen || []).filter((m) => m.label.trim())
         : [],
@@ -385,9 +420,9 @@ export function OpleverFormulierModal({
               </p>
               <p className="mt-0.5 text-xs text-muted">
                 Iets dat nog gefixt moet worden? Dan komt er een
-                serviceverzoek {VERVOLG_OPLEVERFORMULIER_LABEL}. Backoffice
-                belt binnen 1 dag om een service-moment in te plannen (geen
-                mail naar de klant).
+                serviceverzoek {VERVOLG_OPLEVERFORMULIER_LABEL}. Kies meteen
+                datum/tijd — die wordt op het planbord gezet (geen mail naar
+                de klant).
               </p>
             </div>
             <div className="space-y-3 px-3 py-3">
@@ -400,6 +435,9 @@ export function OpleverFormulierModal({
                     setForm((p) => ({
                       ...p,
                       vervolgNodig: on,
+                      vervolgAt: on
+                        ? p.vervolgAt || defaultVervolgDatetimeLocal()
+                        : p.vervolgAt,
                       vervolgMaterialen:
                         on && (p.vervolgMaterialen || []).length === 0
                           ? [{ id: newMateriaalId(), label: "", aantal: 1 }]
@@ -425,6 +463,19 @@ export function OpleverFormulierModal({
                       }
                       rows={3}
                       placeholder="Bijv. kabelgoot afwerken, app koppelen, extra aardlek…"
+                      className="w-full border border-line bg-white px-2.5 py-1.5 text-sm text-ink outline-none focus:border-[#0D9488]"
+                    />
+                  </label>
+                  <label className="block space-y-1">
+                    <span className="text-[10px] font-semibold uppercase tracking-[0.05em] text-muted">
+                      Wanneer (service) *
+                    </span>
+                    <input
+                      type="datetime-local"
+                      value={form.vervolgAt}
+                      onChange={(e) =>
+                        setForm((p) => ({ ...p, vervolgAt: e.target.value }))
+                      }
                       className="w-full border border-line bg-white px-2.5 py-1.5 text-sm text-ink outline-none focus:border-[#0D9488]"
                     />
                   </label>

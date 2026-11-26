@@ -27,6 +27,7 @@ export function ProjectFinancieringPath({
   aanbetalingInc = null,
   warmtefondsInc = null,
   restantFactuurStatus = null,
+  warmtepomp = false,
   onOpenFinancieel,
   actiesAgenda = false,
   leadId = null,
@@ -43,6 +44,8 @@ export function ProjectFinancieringPath({
   aanbetalingInc?: number | null;
   warmtefondsInc?: number | null;
   restantFactuurStatus?: string | null;
+  /** Warmtepomp: WF-bedrag zonder € 8.500-plafond. */
+  warmtepomp?: boolean;
   onOpenFinancieel?: () => void;
   /** Acties: WF-adviseur-slots 09/11/13/15/17/19, niet de sales-agenda. */
   actiesAgenda?: boolean;
@@ -286,7 +289,9 @@ export function ProjectFinancieringPath({
           ) : null}
           {warmtefondsInc != null ? (
             <p className="flex justify-between gap-2 text-muted">
-              WF-aanvraag (max. {formatEuro(RESTANT_VAST_INC_BTW)})
+              {warmtepomp
+                ? "WF-aanvraag"
+                : `WF-aanvraag (max. ${formatEuro(RESTANT_VAST_INC_BTW)})`}
               <span className="tabular-nums font-semibold text-[#C45A12]">
                 {formatEuro(warmtefondsInc)}
               </span>

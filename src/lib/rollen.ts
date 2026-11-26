@@ -161,6 +161,7 @@ export function tabsVoorRol(
         "projecten",
         "inbox",
         "facturen",
+        "uitbetalingen",
         "purchasing",
         "sales_cockpit",
         "finance",

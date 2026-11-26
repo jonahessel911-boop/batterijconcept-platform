@@ -54,12 +54,18 @@ export function useBestSlots(opts: {
   lockAdviseur?: boolean;
   defaultAdviseurId?: string | null;
   enabled?: boolean;
+  /**
+   * true (default): direct laden bij lead-wissel.
+   * false: alleen na `loadBestSlots()` — scheelt Google Maps / reistijd-calls.
+   */
+  autoload?: boolean;
 }) {
   const {
     lead,
     lockAdviseur = false,
     defaultAdviseurId,
     enabled = true,
+    autoload = true,
   } = opts;
 
   const [bestSlots, setBestSlots] = useState<BestSlotOption[]>([]);
@@ -70,40 +76,49 @@ export function useBestSlots(opts: {
     "route" | "calendar" | null
   >(null);
   const [bestSlotsLimit, setBestSlotsLimit] = useState<5 | 10>(5);
+  /** true nadat gebruiker (of autoload) een fetch heeft gestart voor deze lead. */
+  const [hasLoaded, setHasLoaded] = useState(false);
 
   const reset = useCallback(() => {
     setBestSlots([]);
     setBestSlotsLimit(5);
     setBestSlotsError(null);
     setBestSlotsMode(null);
+    setHasLoaded(false);
   }, []);
 
-  useEffect(() => {
-    if (!enabled || !lead?.id) {
-      reset();
-      return;
-    }
-    const adres = adresRegel(lead);
-    if (adres === "—") {
-      setBestSlots([]);
-      setBestSlotsLimit(5);
-      setBestSlotsError(
-        "Lead heeft geen volledig adres — top-opties niet beschikbaar."
-      );
-      setBestSlotsLoading(false);
-      setBestSlotsMode(null);
-      return;
-    }
+  const fetchBestSlots = useCallback(
+    async (limit: 5 | 10) => {
+      if (!enabled || !lead?.id) {
+        reset();
+        return;
+      }
+      const adres = adresRegel(lead);
+      if (adres === "—") {
+        setBestSlots([]);
+        setBestSlotsLimit(5);
+        setBestSlotsError(
+          "Lead heeft geen volledig adres — top-opties niet beschikbaar."
+        );
+        setBestSlotsLoading(false);
+        setBestSlotsLoadingMore(false);
+        setBestSlotsMode(null);
+        setHasLoaded(true);
+        return;
+      }
 
-    let cancelled = false;
-    setBestSlotsLoading(true);
-    setBestSlotsError(null);
-    setBestSlotsLimit(5);
-    queueMicrotask(async () => {
+      if (limit === 5) {
+        setBestSlotsLoading(true);
+        setBestSlotsLimit(5);
+      } else {
+        setBestSlotsLoadingMore(true);
+      }
+      setBestSlotsError(null);
+      setHasLoaded(true);
       try {
         const qs = new URLSearchParams({
           lead_id: lead.id,
-          limit: "5",
+          limit: String(limit),
           days: "16",
         });
         if (lockAdviseur && defaultAdviseurId) {
@@ -111,13 +126,15 @@ export function useBestSlots(opts: {
         }
         const res = await fetch(`/api/best-slots?${qs}`);
         const data = await res.json().catch(() => ({}));
-        if (cancelled) return;
         if (!res.ok) {
           setBestSlots([]);
           setBestSlotsError(
-            (data as { error?: string }).error || "Beste opties laden mislukt"
+            (data as { error?: string }).error ||
+              (limit === 5
+                ? "Beste opties laden mislukt"
+                : "Extra opties laden mislukt")
           );
-          setBestSlotsMode(null);
+          if (limit === 5) setBestSlotsMode(null);
           return;
         }
         let slots = (data.slots || []) as BestSlotOption[];
@@ -125,22 +142,44 @@ export function useBestSlots(opts: {
           slots = slots.filter((s) => s.adviseur_id === defaultAdviseurId);
         }
         setBestSlots(slots);
+        setBestSlotsLimit(limit);
         setBestSlotsMode(
           data.mode === "route" || data.mode === "calendar" ? data.mode : null
         );
         setBestSlotsError(null);
       } catch {
-        if (!cancelled) {
-          setBestSlots([]);
-          setBestSlotsError("Beste opties laden mislukt");
-        }
+        setBestSlots([]);
+        setBestSlotsError(
+          limit === 5
+            ? "Beste opties laden mislukt"
+            : "Extra opties laden mislukt"
+        );
       } finally {
-        if (!cancelled) setBestSlotsLoading(false);
+        setBestSlotsLoading(false);
+        setBestSlotsLoadingMore(false);
       }
-    });
+    },
+    [enabled, lead, lockAdviseur, defaultAdviseurId, reset]
+  );
+
+  // Lead-wissel: state leeg. Autoload alleen als gevraagd.
+  useEffect(() => {
+    if (!enabled || !lead?.id) {
+      reset();
+      return;
+    }
+    reset();
+    if (!autoload) return;
+    let cancelled = false;
+    void (async () => {
+      await fetchBestSlots(5);
+      if (cancelled) return;
+    })();
     return () => {
       cancelled = true;
     };
+    // Alleen bij lead/context-wissel — niet bij elke fetchBestSlots-identiteit.
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- autoload + lead-key
   }, [
     enabled,
     lead?.id,
@@ -151,45 +190,17 @@ export function useBestSlots(opts: {
     lead?.plaats,
     lockAdviseur,
     defaultAdviseurId,
+    autoload,
     reset,
   ]);
 
+  const loadBestSlots = useCallback(async () => {
+    await fetchBestSlots(5);
+  }, [fetchBestSlots]);
+
   async function loadMeerBestSlots() {
     if (!lead?.id || bestSlotsLoadingMore || bestSlotsLimit >= 10) return;
-    setBestSlotsLoadingMore(true);
-    setBestSlotsError(null);
-    try {
-      const qs = new URLSearchParams({
-        lead_id: lead.id,
-        limit: "10",
-        days: "16",
-      });
-      if (lockAdviseur && defaultAdviseurId) {
-        qs.set("adviseur_id", defaultAdviseurId);
-      }
-      const res = await fetch(`/api/best-slots?${qs}`);
-      const data = await res.json().catch(() => ({}));
-      if (!res.ok) {
-        throw new Error(
-          (data as { error?: string }).error || "Extra opties laden mislukt"
-        );
-      }
-      let slots = (data.slots || []) as BestSlotOption[];
-      if (lockAdviseur && defaultAdviseurId) {
-        slots = slots.filter((s) => s.adviseur_id === defaultAdviseurId);
-      }
-      setBestSlots(slots);
-      setBestSlotsLimit(10);
-      setBestSlotsMode(
-        data.mode === "route" || data.mode === "calendar" ? data.mode : null
-      );
-    } catch (e) {
-      setBestSlotsError(
-        e instanceof Error ? e.message : "Extra opties laden mislukt"
-      );
-    } finally {
-      setBestSlotsLoadingMore(false);
-    }
+    await fetchBestSlots(10);
   }
 
   return {
@@ -199,6 +210,8 @@ export function useBestSlots(opts: {
     bestSlotsError,
     bestSlotsMode,
     bestSlotsLimit,
+    bestSlotsHasLoaded: hasLoaded,
+    loadBestSlots,
     loadMeerBestSlots,
     resetBestSlots: reset,
   };
@@ -216,6 +229,9 @@ export function BestSlotsOptionsList({
   loadingMore,
   onLoadMore,
   lockAdviseur,
+  /** Lazy: nog niet geladen → knop i.p.v. “geen opties”. */
+  hasLoaded = true,
+  onLoad,
 }: {
   slots: BestSlotOption[];
   selectedSlotId: string | null;
@@ -227,6 +243,8 @@ export function BestSlotsOptionsList({
   loadingMore: boolean;
   onLoadMore: () => void;
   lockAdviseur?: boolean;
+  hasLoaded?: boolean;
+  onLoad?: () => void;
 }) {
   return (
     <div className="space-y-2">
@@ -245,10 +263,35 @@ export function BestSlotsOptionsList({
 
       {loading ? (
         <p className="text-sm text-muted">Beste opties berekenen…</p>
+      ) : !hasLoaded ? (
+        <div className="space-y-2">
+          <p className="text-xs text-muted">
+            Reistijd over adviseurs kost Maps-credits — alleen laden als je
+            gaat inplannen.
+          </p>
+          <button
+            type="button"
+            onClick={() => onLoad?.()}
+            className="w-full border border-green/40 bg-green-soft px-3 py-2.5 text-sm font-semibold text-green-dark hover:border-green"
+          >
+            Laad opties
+          </button>
+        </div>
       ) : error ? (
-        <p className="border border-[#C45A12]/30 bg-[#FFF0E6] px-3 py-2 text-xs text-[#C45A12]">
-          {error}
-        </p>
+        <div className="space-y-2">
+          <p className="border border-[#C45A12]/30 bg-[#FFF0E6] px-3 py-2 text-xs text-[#C45A12]">
+            {error}
+          </p>
+          {onLoad ? (
+            <button
+              type="button"
+              onClick={() => onLoad()}
+              className="w-full border border-line bg-wash px-3 py-2 text-xs font-semibold text-ink hover:bg-white"
+            >
+              Opnieuw laden
+            </button>
+          ) : null}
+        </div>
       ) : slots.length === 0 ? (
         <p className="text-sm text-muted">
           Geen gezamenlijke opties — kies handmatig hieronder.

@@ -36,6 +36,7 @@ import {
   type ProductInkoop,
 } from "@/lib/inkoop";
 import { resolveMateriaalLeverdatum } from "@/lib/materiaal-leverdatum";
+import { productSoortVanRegels } from "@/lib/project-product";
 import {
   resolveInkoopLeverancierBetaaldOp,
   resolveInkoopLeverancierStatus,
@@ -92,6 +93,28 @@ const CANDIDATE_STATUSES = new Set([
   "afgerond",
   "service",
 ]);
+
+function isWarmtepompInkoopOrder(
+  regels: {
+    omschrijving: string;
+    product_id?: string | null;
+  }[],
+  producten: ProductInkoop[]
+): boolean {
+  const byId = new Map(producten.map((p) => [p.id, p]));
+  return (
+    productSoortVanRegels(
+      regels.map((r) => {
+        const p = r.product_id ? byId.get(r.product_id) : undefined;
+        return {
+          sku: p?.sku,
+          naam: p?.naam,
+          omschrijving: r.omschrijving,
+        };
+      })
+    ) === "warmtepomp"
+  );
+}
 
 function mapProduct(row: Record<string, unknown>): ProductInkoop {
   const sku = (row.sku as string | null) || null;
@@ -399,12 +422,13 @@ export async function GET(_req: NextRequest) {
       regelsByOfferte.set(oid, list);
     }
 
-    const built = visibleCandidates.map((p) => {
+    const built = visibleCandidates.flatMap((p) => {
       const status = remapLegacyProjectStatus(String(p.status || ""));
       const offerteId = (p.offerte_id as string | null) || null;
       const regels = offerteId
         ? regelsByOfferte.get(offerteId) || []
         : [];
+      if (isWarmtepompInkoopOrder(regels, producten)) return [];
       const checks = (p.materiaal_checks || {}) as MateriaalChecks;
       const items = buildInkoopChecklist(regels, producten, checks);
       const summary = orderInkoopSamenvatting(items, checks);
@@ -471,7 +495,8 @@ export async function GET(_req: NextRequest) {
       const teBestellenEx = inkoopTeBestellenTotaalExBtw(items, checks);
       const besteldEx = inkoopBesteldTotaalExBtw(items, checks);
 
-      return {
+      return [
+      {
         id: p.id as string,
         project_nummer: p.project_nummer as string | null,
         status,
@@ -528,7 +553,8 @@ export async function GET(_req: NextRequest) {
             notitie: item.notitie || null,
           };
         }),
-      };
+      },
+    ];
     });
 
     const orders = built;
@@ -701,6 +727,7 @@ export async function GET(_req: NextRequest) {
         const regels = offerteId
           ? regelsByOfferte.get(offerteId) || []
           : [];
+        if (isWarmtepompInkoopOrder(regels, producten)) continue;
         const checks = (p.materiaal_checks || {}) as MateriaalChecks;
         const items = buildInkoopChecklist(regels, producten, checks);
 

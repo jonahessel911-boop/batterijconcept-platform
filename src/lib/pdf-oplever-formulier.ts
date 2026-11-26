@@ -251,11 +251,25 @@ export async function buildOpleverFormulierPdf(
     doc.setFont("helvetica", "normal");
     doc.setFontSize(9);
     const toelichting = doc.splitTextToSize(
-      "Serviceverzoek: backoffice neemt contact op om een service-moment in te plannen.",
+      "Serviceverzoek: moment hieronder staat op het planbord.",
       contentW
     );
     doc.text(toelichting, margin, y);
     y += toelichting.length * 4.2 + 2;
+    if (data.vervolgAt.trim()) {
+      const at = new Date(data.vervolgAt.trim());
+      const whenLabel = Number.isNaN(at.getTime())
+        ? data.vervolgAt.trim()
+        : at.toLocaleString("nl-NL", {
+            timeZone: "Europe/Amsterdam",
+            dateStyle: "medium",
+            timeStyle: "short",
+          });
+      doc.setFont("helvetica", "bold");
+      doc.text(`Wanneer: ${whenLabel}`, margin, y);
+      y += 5;
+      doc.setFont("helvetica", "normal");
+    }
     if (data.vervolgActie.trim()) {
       const actie = doc.splitTextToSize(data.vervolgActie.trim(), contentW);
       doc.text(actie, margin, y);

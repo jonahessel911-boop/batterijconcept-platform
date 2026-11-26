@@ -75,6 +75,7 @@ import {
   materiaalNogTeBestellen,
 } from "@/lib/inkoop-sla";
 import type { ProductInkoop } from "@/lib/inkoop";
+import { isWarmtepompOrder } from "@/lib/project-product";
 import { telefoonMatch } from "@/lib/rollen";
 import { rememberCrmReturnUrl } from "./DetailChrome";
 
@@ -1752,8 +1753,9 @@ function KanbanActieDrawer({
   const fsLabel = fs ? FINANCIERING_STATUS_LABEL[fs] : null;
 
   const showPurchasingInfo =
-    orderStatus === "installatie_ingepland" ||
-    orderStatus === "materiaal_besteld";
+    !isWarmtepompOrder(project) &&
+    (orderStatus === "installatie_ingepland" ||
+      orderStatus === "materiaal_besteld");
 
   const batterijStatus = useMemo(
     () => batterijPurchasingStatus(project.materiaal_checks),

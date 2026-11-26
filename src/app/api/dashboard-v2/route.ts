@@ -621,7 +621,9 @@ export async function GET(req: NextRequest) {
     }
 
     // Offertes verstuurd in bereik: verzonden_op (niet updated_at / ondertekend_op)
-    const rangeStart = resolveVandaagRange(now, vandaagPeriode).start.toISOString();
+    const vandaagRange = resolveVandaagRange(now, vandaagPeriode);
+    const rangeStart = vandaagRange.start.toISOString();
+    const rangeEnd = vandaagRange.end.toISOString();
     let offertesVerzonden: {
       id: string;
       adviseur_id: string | null;
@@ -687,12 +689,43 @@ export async function GET(req: NextRequest) {
       }
     }
 
+    // Status/bel-events voor “bereikt” (geen interesse) in vandaag-bereik
+    let leadEvents: {
+      lead_id: string;
+      soort: string;
+      titel: string | null;
+      meta: Record<string, unknown> | null;
+      created_at: string;
+    }[] = [];
+    try {
+      const eventRows = await fetchAllRows((from, to) =>
+        sb
+          .from("lead_events")
+          .select("id, lead_id, soort, titel, meta, created_at")
+          .in("soort", ["status", "bel"])
+          .gte("created_at", rangeStart)
+          .lte("created_at", rangeEnd)
+          .order("created_at", { ascending: true })
+          .range(from, to)
+      );
+      leadEvents = eventRows.map((e) => ({
+        lead_id: e.lead_id as string,
+        soort: (e.soort as string) || "",
+        titel: (e.titel as string) || null,
+        meta: (e.meta as Record<string, unknown> | null) || null,
+        created_at: e.created_at as string,
+      }));
+    } catch {
+      leadEvents = [];
+    }
+
     const vandaag = buildDashboardV2Vandaag(
       {
         leads: raw.leads,
         afspraken: raw.afspraken,
         offertes: toDashboardRaw(raw).offertes,
         offertesVerzonden,
+        leadEvents,
         adviseurs: raw.adviseurs,
       },
       now,

@@ -164,10 +164,16 @@ export async function POST(
       );
     }
 
-    await supabase
-      .from("leads")
-      .update({ status: "deal" })
-      .eq("id", offerte.lead_id);
+    const leadId = String(offerte.lead_id || "");
+    if (leadId) {
+      const { error: dealErr } = await supabase
+        .from("leads")
+        .update({ status: "deal" })
+        .eq("id", leadId);
+      if (dealErr) {
+        console.error("Lead naar deal na tekenen:", dealErr);
+      }
+    }
 
     const { queueLeadMetaCapi } = await import("@/lib/meta-capi");
     queueLeadMetaCapi(offerte.lead_id);

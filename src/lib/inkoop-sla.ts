@@ -3,6 +3,7 @@ import { formatInTimeZone, fromZonedTime, toZonedTime } from "date-fns-tz";
 import { AMSTERDAM_TZ } from "@/lib/format";
 import { parseInkoopRegelStatus } from "@/lib/project-inkoop-checklist";
 import { toOperationalStatus } from "@/lib/project-status-config";
+import { isWarmtepompOrder } from "@/lib/project-product";
 import type { Project } from "@/types/database";
 
 /** Batterij/materiaal uiterlijk zoveel werkdagen (ma–vr) vóór installatie besteld. */
@@ -101,6 +102,7 @@ export function bestelDeadlineVoorInstallatie(
  * zouden anders de Acties-kaart “Batterij bestellen” ten onrechte openhouden.
  */
 export function materiaalNogTeBestellen(project: Project): boolean {
+  if (isWarmtepompOrder(project)) return false;
   const op = toOperationalStatus(project.status);
   if (KLAAR_ZONDER_INKOOP.has(op)) return false;
 

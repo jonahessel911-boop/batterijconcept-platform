@@ -1,7 +1,8 @@
 /**
  * Na schouwformulier-upload: status doorzetten.
- * - Nog openstaande facturen → Schouw voltooid (backoffice checkt Financieel)
- * - Alles betaald → Restfactuur betaald (= klaar om materiaal in te kopen)
+ * - EM: aanbetaling/order gedekt → restfactuur_betaald (materiaal)
+ * - WF: alleen als de WF-declaratie/restant betaald is (niet alleen BTW-aanbetaling)
+ * - Anders → Schouw voltooid (WF blijft wachten op financiering)
  */
 import type { SupabaseClient } from "@supabase/supabase-js";
 import {
@@ -20,6 +21,13 @@ type FactuurRow = {
   omschrijving?: string | null;
   credit_van_factuur_id?: string | null;
 };
+
+function isWfDeclaratieOfRestantOmschrijving(
+  omschrijving: string | null | undefined
+): boolean {
+  if (isRestantFactuurOmschrijving(omschrijving)) return true;
+  return /declaratie|warmtefonds.?restant/i.test(omschrijving || "");
+}
 
 const PIPELINE_RANK: Record<string, number> = {
   schouwweek_inplannen: 1,
@@ -45,11 +53,13 @@ function rank(status: string | null | undefined): number {
   return PIPELINE_RANK[op] ?? PIPELINE_RANK[status] ?? 0;
 }
 
-/** Geen openstaande klantfacturen + (WF: iets betaald) of (EM: order gedekt). */
+/** Geen openstaande klantfacturen + (WF: declaratie/uitbetaald) of (EM: order gedekt). */
 export function isProjectKlaarVoorMateriaalInkopen(opts: {
   facturen: FactuurRow[];
   orderIncBtw?: number | null;
   warmtefonds: boolean;
+  financieringStatus?: string | null;
+  warmtefondsUitbetaaldAt?: string | null;
 }): boolean {
   const facs = opts.facturen.filter(
     (f) => !f.credit_van_factuur_id && f.status !== "vervallen"
@@ -61,6 +71,19 @@ export function isProjectKlaarVoorMateriaalInkopen(opts: {
   if (open.length > 0) return false;
 
   const paid = facs.filter((f) => f.status === "betaald");
+
+  if (opts.warmtefonds) {
+    if (
+      opts.financieringStatus === "uitbetaald" ||
+      Boolean(opts.warmtefondsUitbetaaldAt)
+    ) {
+      return true;
+    }
+    return paid.some((f) =>
+      isWfDeclaratieOfRestantOmschrijving(f.omschrijving)
+    );
+  }
+
   if (paid.length === 0) return false;
 
   if (paid.some((f) => isRestantFactuurOmschrijving(f.omschrijving))) {
@@ -70,11 +93,6 @@ export function isProjectKlaarVoorMateriaalInkopen(opts: {
   const aanbetalingBetaald = paid.some((f) =>
     isAanbetalingFactuurOmschrijving(f.omschrijving)
   );
-
-  if (opts.warmtefonds) {
-    // Warmtefonds: klantfacturen (meestal BTW/aanbetaling) betaald, geen open posten
-    return aanbetalingBetaald || paid.length > 0;
-  }
 
   // Eigen middelen 50/50: aanbetaling (50%) betaald → materiaal/installatie;
   // restantfactuur volgt ná installatie.
@@ -115,7 +133,7 @@ export async function maybeAdvanceProjectNaSchouw(
   const { data: project, error } = await sb
     .from("projecten")
     .select(
-      "id, status, lead_id, project_nummer, betaalwijze, offerte_id, leads(status), offertes(id, totaal_inc_btw, financiering_voorbehoud)"
+      "id, status, lead_id, project_nummer, betaalwijze, offerte_id, financiering_status, warmtefonds_uitbetaald_at, leads(status), offertes(id, totaal_inc_btw, financiering_voorbehoud)"
     )
     .eq("id", projectId)
     .maybeSingle();
@@ -200,6 +218,12 @@ export async function maybeAdvanceProjectNaSchouw(
     facturen: related,
     orderIncBtw: off?.totaal_inc_btw,
     warmtefonds,
+    financieringStatus: (
+      project as { financiering_status?: string | null }
+    ).financiering_status,
+    warmtefondsUitbetaaldAt: (
+      project as { warmtefonds_uitbetaald_at?: string | null }
+    ).warmtefonds_uitbetaald_at,
   });
 
   const target = targetStatusNaSchouw(klaar);
@@ -258,8 +282,12 @@ export async function maybeAdvanceProjectNaSchouw(
         ? "Status: Restfactuur betaald (materiaal inkopen)"
         : "Status: Schouw voltooid",
       detail: klaar
-        ? "Schouwformulier binnen + alles betaald → klaar voor materiaalinkoop"
-        : "Schouwformulier binnen — check Financieel (nog niet alles betaald)",
+        ? warmtefonds
+          ? "Schouwformulier binnen + Warmtefonds-declaratie betaald → klaar voor materiaalinkoop"
+          : "Schouwformulier binnen + alles betaald → klaar voor materiaalinkoop"
+        : warmtefonds
+          ? "Schouwformulier binnen — wachten op Warmtefonds-uitbetaling (aanbetaling telt niet als WF-declaratie)"
+          : "Schouwformulier binnen — check Financieel (nog niet alles betaald)",
       meta: {
         project_id: projectId,
         project_nummer: project.project_nummer,

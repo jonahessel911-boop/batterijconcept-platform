@@ -29,6 +29,7 @@ import {
   parseEuroInput,
   type AanbetalingModus,
 } from "@/lib/aanbetaling";
+import { productSoortVanRegels } from "@/lib/project-product";
 import {
   BackofficeActieForm,
   type BackofficeActieFormValues,
@@ -263,6 +264,7 @@ export function OffertePage() {
         modus: saveModus,
         handmatigIncBtw: parseEuroInput(aanbetalingHandmatig),
         financieringVoorbehoud: isWarmtefonds,
+        warmtepomp: productSoortVanRegels(offerte.offerte_regels) === "warmtepomp",
       });
 
       const res = await fetch(`/api/offertes/${offerte.id}`, {
@@ -596,6 +598,10 @@ export function OffertePage() {
                 financieringVoorbehoud={Boolean(
                   offerte.financiering_voorbehoud
                 )}
+                warmtepomp={
+                  productSoortVanRegels(offerte.offerte_regels) ===
+                  "warmtepomp"
+                }
                 adviseurNaam={(() => {
                   const lead = Array.isArray(offerte.leads)
                     ? offerte.leads[0]

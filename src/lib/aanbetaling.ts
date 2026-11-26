@@ -64,13 +64,16 @@ function round2(n: number): number {
 }
 
 /**
- * Warmtefonds-plafond voor de aanvraag: max € 8.500,
- * nooit hoger dan wat na de aanbetaling nog openstaat.
+ * Warmtefonds-deel van het restant.
+ * Batterij: plafond € 8.500. Warmtepomp: hele restant via WF, geen plafond.
  */
-export function warmtefondsAanvraagIncBtw(naAanbetalingInc: number): number {
-  return round2(
-    Math.max(0, Math.min(RESTANT_VAST_INC_BTW, round2(naAanbetalingInc)))
-  );
+export function warmtefondsAanvraagIncBtw(
+  naAanbetalingInc: number,
+  opts?: { plafond?: boolean }
+): number {
+  const open = round2(Math.max(0, round2(naAanbetalingInc)));
+  if (opts?.plafond === false) return open;
+  return round2(Math.min(RESTANT_VAST_INC_BTW, open));
 }
 
 /**
@@ -306,12 +309,15 @@ export function orderBetalingProgress(opts: {
 
 /**
  * Bedrag voor restantfactuur.
- * Warmtefonds: aanvraagdeel max € 8.500, nooit hoger dan wat nog openstaat.
+ * Warmtefonds + batterij: aanvraagdeel max € 8.500.
+ * Warmtefonds + warmtepomp: het openstaande bedrag (geen plafond).
  */
 export function restantFactuurBedrag(opts: {
   orderIncBtw: number;
   orderExBtw?: number | null;
   warmtefonds?: boolean | null;
+  /** false bij warmtepomp: geen € 8.500-plafond */
+  warmtefondsPlafond?: boolean;
   facturen: {
     status: string;
     bedrag_inc_btw: number;
@@ -325,7 +331,9 @@ export function restantFactuurBedrag(opts: {
     excludeRestant: opts.excludeRestant,
   });
   if (!opts.warmtefonds) return open;
-  return warmtefondsAanvraagIncBtw(open);
+  return warmtefondsAanvraagIncBtw(open, {
+    plafond: opts.warmtefondsPlafond !== false,
+  });
 }
 
 export type Aanbetaling = {
@@ -337,7 +345,7 @@ export type Aanbetaling = {
   bedragIncBtw: number;
   /** Alles na de aanbetaling (vóór WF-plafond) */
   restantIncBtw: number;
-  /** Warmtefonds-aanvraag: max € 8.500 van het restant */
+  /** Warmtefonds-aanvraag (batterij: max € 8.500; warmtepomp: heel restant) */
   warmtefondsIncBtw: number;
   /** Wat na aanbetaling + WF-plafond nog open kan blijven */
   overigNaWarmtefondsIncBtw: number;
@@ -388,6 +396,8 @@ export function aanbetalingVanOrder(opts: {
   modus?: AanbetalingModus | string | null;
   handmatigIncBtw?: number | null;
   financieringVoorbehoud?: boolean | null;
+  /** Warmtepomp: geen € 8.500-plafond op het WF-deel */
+  warmtepomp?: boolean | null;
 }): Aanbetaling {
   const orderExBtw = round2(Number(opts.subtotaalExBtw) || 0);
   const orderBtw =
@@ -417,7 +427,9 @@ export function aanbetalingVanOrder(opts: {
   } else if (modus === "btw" && warmtefonds) {
     bedragIncBtw = round2(Math.min(orderBtw, orderIncBtw));
   } else if (warmtefonds) {
-    const restant = warmtefondsRestantIncBtw(orderExBtw);
+    const restant = warmtefondsAanvraagIncBtw(orderExBtw, {
+      plafond: !opts.warmtepomp,
+    });
     bedragIncBtw = round2(Math.max(0, orderIncBtw - restant));
   } else {
     bedragIncBtw = round2(orderIncBtw / 2);
@@ -425,8 +437,9 @@ export function aanbetalingVanOrder(opts: {
 
   const split = splitIncToExBtw(bedragIncBtw);
   const restantIncBtw = round2(Math.max(0, orderIncBtw - split.inc));
+  const plafond = !opts.warmtepomp;
   const warmtefondsIncBtw = warmtefonds
-    ? warmtefondsAanvraagIncBtw(restantIncBtw)
+    ? warmtefondsAanvraagIncBtw(restantIncBtw, { plafond })
     : 0;
   const overigNaWarmtefondsIncBtw = warmtefonds
     ? round2(Math.max(0, restantIncBtw - warmtefondsIncBtw))

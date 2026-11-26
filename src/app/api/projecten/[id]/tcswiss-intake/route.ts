@@ -8,7 +8,6 @@ import {
   tcSwissConfigured,
   tcSwissLeadIntake,
   tcSwissLeadsZoeken,
-  tcSwissNotitieToevoegen,
 } from "@/lib/tcswiss";
 import {
   parseTcSwissIntakeStored,
@@ -18,6 +17,10 @@ import {
   TCSWISS_INTAKE_CHECK_KEY,
   type TcSwissIntakeStored,
 } from "@/lib/tcswiss-intake";
+import {
+  tcSwissDoorgestuurdTekst,
+  warmtepompProductNaam,
+} from "@/lib/project-product";
 
 export const runtime = "nodejs";
 
@@ -125,9 +128,11 @@ export async function GET(
     const stored = storedFromChecks(
       project.materiaal_checks as Record<string, boolean | string> | null
     );
-    const applicable =
-      Boolean(stored) ||
-      (await offerteHeeftWarmtepomp(sb, project.offerte_id as string | null));
+    const regels = project.offerte_id
+      ? await loadOfferteRegelsMetSku(sb, project.offerte_id as string)
+      : [];
+    const applicable = Boolean(stored) || regelsZijnWarmtepomp(regels);
+    const productNaam = warmtepompProductNaam(regels);
 
     const refresh = new URL(req.url).searchParams.get("refresh") === "1";
     let lookup: {
@@ -159,6 +164,8 @@ export async function GET(
       tcswissLead: stored?.lead || null,
       externId: stored?.externId || null,
       duplicate: stored?.duplicate || false,
+      productNaam,
+      doorgestuurdTekst: tcSwissDoorgestuurdTekst(productNaam),
       lookup,
     });
   } catch (e) {
@@ -186,7 +193,7 @@ export async function POST(
     let { data: project, error } = await sb
       .from("projecten")
       .select(
-        "id, offerte_id, lead_id, project_nummer, materiaal_checks, betaalwijze, financiering_status, schouw_at, schouw_jaar, schouw_week, schouw_notities, notities, backoffice_notitie, leads(id, naam, email, telefoon, postcode, huisnummer, toevoeging, straat, plaats, notities, adviseur_id, adviseurs!adviseur_id(id, naam))"
+        "id, offerte_id, lead_id, project_nummer, materiaal_checks, betaalwijze, financiering_status, schouw_at, schouw_jaar, schouw_week, leads(id, naam, email, telefoon, postcode, huisnummer, toevoeging, straat, plaats, adviseur_id, adviseurs!adviseur_id(id, naam))"
       )
       .eq("id", id)
       .single();
@@ -194,7 +201,7 @@ export async function POST(
       const retry = await sb
         .from("projecten")
         .select(
-          "id, offerte_id, lead_id, project_nummer, materiaal_checks, betaalwijze, financiering_status, schouw_at, schouw_jaar, schouw_week, schouw_notities, notities, backoffice_notitie, leads(id, naam, email, telefoon, postcode, huisnummer, toevoeging, straat, plaats, notities, adviseur_id)"
+          "id, offerte_id, lead_id, project_nummer, materiaal_checks, betaalwijze, financiering_status, schouw_at, schouw_jaar, schouw_week, leads(id, naam, email, telefoon, postcode, huisnummer, toevoeging, straat, plaats, adviseur_id)"
         )
         .eq("id", id)
         .single();
@@ -210,6 +217,10 @@ export async function POST(
       boolean | string
     >;
     const stored = storedFromChecks(checks);
+    const regelsVoorNaam = project.offerte_id
+      ? await loadOfferteRegelsMetSku(sb, project.offerte_id as string)
+      : [];
+    const productNaamEarly = warmtepompProductNaam(regelsVoorNaam);
     if (stored) {
       return NextResponse.json({
         ok: true,
@@ -218,6 +229,8 @@ export async function POST(
         lead: stored.lead,
         externId: stored.externId,
         sentAt: stored.at,
+        productNaam: productNaamEarly,
+        doorgestuurdTekst: tcSwissDoorgestuurdTekst(productNaamEarly),
         materiaal_checks: checks,
       });
     }
@@ -254,7 +267,6 @@ export async function POST(
           toevoeging?: string | null;
           straat?: string | null;
           plaats?: string | null;
-          notities?: string | null;
           adviseur_id?: string | null;
           adviseurs?:
             | { id?: string; naam?: string | null }
@@ -271,7 +283,6 @@ export async function POST(
           toevoeging?: string | null;
           straat?: string | null;
           plaats?: string | null;
-          notities?: string | null;
           adviseur_id?: string | null;
           adviseurs?:
             | { id?: string; naam?: string | null }
@@ -307,7 +318,7 @@ export async function POST(
         ? sb
             .from("offertes")
             .select(
-              "id, offerte_nummer, titel, intro_tekst, notities, subtotaal_ex_btw, btw_bedrag, totaal_inc_btw"
+              "id, offerte_nummer, titel, intro_tekst, subtotaal_ex_btw, btw_bedrag, totaal_inc_btw"
             )
             .eq("id", offerteId)
             .maybeSingle()
@@ -317,7 +328,6 @@ export async function POST(
       offerte_nummer?: string | null;
       titel?: string | null;
       intro_tekst?: string | null;
-      notities?: string | null;
       subtotaal_ex_btw?: number | null;
       btw_bedrag?: number | null;
       totaal_inc_btw?: number | null;
@@ -347,15 +357,6 @@ export async function POST(
       adviseurNaam = String(advRow?.naam || "").trim();
     }
 
-    const notities = [
-      String(lead.notities || "").trim(),
-      String(project.notities || "").trim(),
-      String(project.backoffice_notitie || "").trim(),
-      String(offerte?.notities || "").trim(),
-    ]
-      .filter(Boolean)
-      .join("\n---\n");
-
     const extra = {
       project_nummer: String(project.project_nummer || "").trim() || null,
       warmtepomp_type: warmtepompType || null,
@@ -365,14 +366,18 @@ export async function POST(
       adviseur: adviseurNaam || null,
     };
 
+    const productNaam =
+      warmtepompProductNaam(regels) || warmtepompType || "Warmtepomp";
+    const doorgestuurdTekst = tcSwissDoorgestuurdTekst(productNaam);
+
     const notitieRegels = [
+      doorgestuurdTekst,
       extra.project_nummer && `Project: ${extra.project_nummer}`,
       extra.warmtepomp_type && `Warmtepomp: ${extra.warmtepomp_type}`,
       extra.offerte_nummer && `Offerte: ${extra.offerte_nummer}`,
       extra.sku && `SKU: ${extra.sku}`,
       extra.bedrag_inc && `Totaal inc. btw: € ${extra.bedrag_inc}`,
       extra.adviseur && `Adviseur: ${extra.adviseur}`,
-      notities && `Notities:\n${notities}`,
     ].filter(Boolean);
     const notitie = notitieRegels.join("\n");
 
@@ -389,11 +394,6 @@ export async function POST(
       extra,
       notitie,
     });
-    if (result.lead && notitie) {
-      await tcSwissNotitieToevoegen({ lead: result.lead, tekst: notitie }).catch(
-        (e) => console.error("TC Swiss notitie:", e)
-      );
-    }
 
     const nextStored: TcSwissIntakeStored = {
       at: new Date().toISOString(),
@@ -417,8 +417,8 @@ export async function POST(
         leadId: String(project.lead_id),
         soort: "overig",
         titel: result.duplicate
-          ? "TC Swiss · al bekend (opnieuw ingeschoten)"
-          : "TC Swiss · order ingeschoten",
+          ? `Al bekend bij TC Swiss - ${productNaam}`
+          : doorgestuurdTekst,
         detail: result.lead
           ? `RelayPro-lead ${result.lead}`
           : `extern_id ${result.externId}`,
@@ -439,6 +439,8 @@ export async function POST(
       lead: result.lead,
       externId: result.externId,
       sentAt: nextStored.at,
+      productNaam,
+      doorgestuurdTekst,
       materiaal_checks: nextChecks,
     });
   } catch (e) {

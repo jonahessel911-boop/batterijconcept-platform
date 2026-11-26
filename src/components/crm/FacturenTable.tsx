@@ -28,7 +28,10 @@ type StatusFilter =
   | "betaald"
   | "open"
   | "concept"
-  | "annulering";
+  | "annulering"
+  | "gecrediteerd"
+  | "betaald_credit"
+  | "niet_terugbetaald";
 
 type BtwKwartaal = {
   key: string;
@@ -168,6 +171,11 @@ export function FacturenTable({
     return map;
   }, [facturen]);
 
+  function creditTerugbetaaldVoor(parentId: string): boolean {
+    const credits = creditsByParent.get(parentId) || [];
+    return credits.some((c) => c.status === "betaald" && Boolean(c.betaald_op));
+  }
+
   function factuurMeta(f: Factuur) {
     const project = projectVoorFactuur(f);
     const isWf = isWarmtefondsFactuurContext({ project });
@@ -205,6 +213,26 @@ export function FacturenTable({
         break;
       case "annulering":
         base = base.filter((f) => isAnnuleringsFactuur(f));
+        break;
+      case "gecrediteerd":
+        base = base.filter((f) => creditsByParent.has(f.id));
+        break;
+      case "betaald_credit":
+        base = base.filter(
+          (f) =>
+            creditsByParent.has(f.id) &&
+            f.status === "betaald" &&
+            Boolean(f.betaald_op)
+        );
+        break;
+      case "niet_terugbetaald":
+        base = base.filter(
+          (f) =>
+            creditsByParent.has(f.id) &&
+            f.status === "betaald" &&
+            Boolean(f.betaald_op) &&
+            !creditTerugbetaaldVoor(f.id)
+        );
         break;
       default:
         break;
@@ -326,6 +354,24 @@ export function FacturenTable({
   const annuleringCount = facturen.filter(
     (f) => isAnnuleringsFactuur(f) && !isCreditFactuur(f)
   ).length;
+  const gecrediteerdCount = facturen.filter(
+    (f) => !isCreditFactuur(f) && creditsByParent.has(f.id)
+  ).length;
+  const betaaldCreditCount = facturen.filter(
+    (f) =>
+      !isCreditFactuur(f) &&
+      creditsByParent.has(f.id) &&
+      f.status === "betaald" &&
+      Boolean(f.betaald_op)
+  ).length;
+  const nietTerugbetaaldCount = facturen.filter(
+    (f) =>
+      !isCreditFactuur(f) &&
+      creditsByParent.has(f.id) &&
+      f.status === "betaald" &&
+      Boolean(f.betaald_op) &&
+      !creditTerugbetaaldVoor(f.id)
+  ).length;
 
   const filters: { id: StatusFilter; label: string }[] = [
     { id: "actief", label: "Zonder concepten" },
@@ -338,6 +384,18 @@ export function FacturenTable({
     {
       id: "annulering",
       label: `Annuleringsfacturen${annuleringCount ? ` (${annuleringCount})` : ""}`,
+    },
+    {
+      id: "gecrediteerd",
+      label: `Gecrediteerd${gecrediteerdCount ? ` (${gecrediteerdCount})` : ""}`,
+    },
+    {
+      id: "betaald_credit",
+      label: `Betaald + credit${betaaldCreditCount ? ` (${betaaldCreditCount})` : ""}`,
+    },
+    {
+      id: "niet_terugbetaald",
+      label: `Niet terugbetaald${nietTerugbetaaldCount ? ` (${nietTerugbetaaldCount})` : ""}`,
     },
     { id: "alles", label: "Alles" },
   ];
@@ -553,6 +611,14 @@ export function FacturenTable({
                           Verlopen
                         </span>
                       ) : null}
+                      {heeftCredit &&
+                      f.status === "betaald" &&
+                      f.betaald_op &&
+                      !creditTerugbetaaldVoor(f.id) ? (
+                        <span className="ml-1.5 inline-block border border-amber-300 bg-amber-50 px-1.5 py-0.5 text-[10px] font-bold uppercase tracking-wide text-amber-800">
+                          Niet terugbetaald
+                        </span>
+                      ) : null}
                     </p>
                   </button>
                   <Link
@@ -630,6 +696,14 @@ export function FacturenTable({
                           {overdue ? (
                             <span className="border border-[#C45A12]/40 bg-[#FFF0E6] px-1.5 py-0.5 text-[10px] font-bold uppercase tracking-wide text-[#C45A12]">
                               Verlopen
+                            </span>
+                          ) : null}
+                          {heeftCredit &&
+                          f.status === "betaald" &&
+                          f.betaald_op &&
+                          !creditTerugbetaaldVoor(f.id) ? (
+                            <span className="border border-amber-300 bg-amber-50 px-1.5 py-0.5 text-[10px] font-bold uppercase tracking-wide text-amber-800">
+                              Niet terugbetaald
                             </span>
                           ) : null}
                         </div>

@@ -25,6 +25,7 @@ export function AanbetalingSamenvatting({
   btwBedrag,
   totaalIncBtw,
   financieringVoorbehoud = true,
+  warmtepomp = false,
 }: {
   modus: AanbetalingModus;
   handmatigIncBtw?: number;
@@ -32,6 +33,7 @@ export function AanbetalingSamenvatting({
   btwBedrag: number;
   totaalIncBtw: number;
   financieringVoorbehoud?: boolean;
+  warmtepomp?: boolean;
 }) {
   const preview = aanbetalingVanOrder({
     subtotaalExBtw,
@@ -40,6 +42,7 @@ export function AanbetalingSamenvatting({
     modus,
     handmatigIncBtw,
     financieringVoorbehoud,
+    warmtepomp,
   });
 
   if (!financieringVoorbehoud) {
@@ -94,6 +97,7 @@ export function AanbetalingInstelling({
   btwBedrag,
   totaalIncBtw,
   financieringVoorbehoud = true,
+  warmtepomp = false,
 }: {
   modus: AanbetalingModus;
   onModusChange: (m: AanbetalingModus) => void;
@@ -103,6 +107,7 @@ export function AanbetalingInstelling({
   btwBedrag: number;
   totaalIncBtw: number;
   financieringVoorbehoud?: boolean;
+  warmtepomp?: boolean;
 }) {
   const name = useId();
   const warmtefonds = Boolean(financieringVoorbehoud);
@@ -114,7 +119,11 @@ export function AanbetalingInstelling({
     modus,
     handmatigIncBtw: handmatigNum,
     financieringVoorbehoud: warmtefonds,
+    warmtepomp,
   });
+  const modusOpties = warmtepomp
+    ? AANBETALING_MODUS_OPTIES.filter((opt) => opt.value !== "restant")
+    : AANBETALING_MODUS_OPTIES;
 
   if (!warmtefonds) {
     const keuze = eigenMiddelenUiKeuze(modus, handmatigNum, totaalIncBtw);
@@ -246,11 +255,12 @@ export function AanbetalingInstelling({
         </span>
       </div>
       <p className="text-xs text-muted">
-        Standaard betaalt de klant de BTW. Warmtefonds-aanvraag is max.{" "}
-        {formatEuro(RESTANT_VAST_INC_BTW)}. Restantfactuur pas ná goedkeuring.
+        {warmtepomp
+          ? "Standaard betaalt de klant de BTW. Het restant gaat via Warmtefonds. Restantfactuur pas ná goedkeuring."
+          : `Standaard betaalt de klant de BTW. Warmtefonds-aanvraag is max. ${formatEuro(RESTANT_VAST_INC_BTW)}. Restantfactuur pas ná goedkeuring.`}
       </p>
       <div className="space-y-2">
-        {AANBETALING_MODUS_OPTIES.map((opt) => (
+        {modusOpties.map((opt) => (
           <label
             key={opt.value}
             className="flex items-start gap-3 text-sm text-ink"
@@ -290,7 +300,9 @@ export function AanbetalingInstelling({
           </span>
         </p>
         <p className="flex justify-between gap-3 text-muted">
-          Warmtefonds-aanvraag (max. {formatEuro(RESTANT_VAST_INC_BTW)})
+          {warmtepomp
+            ? "Warmtefonds-aanvraag"
+            : `Warmtefonds-aanvraag (max. ${formatEuro(RESTANT_VAST_INC_BTW)})`}
           <span className="tabular-nums font-medium text-ink">
             {formatEuro(preview.warmtefondsIncBtw)}
           </span>

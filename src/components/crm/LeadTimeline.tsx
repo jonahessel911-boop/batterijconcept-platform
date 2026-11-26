@@ -78,6 +78,10 @@ export function LeadTimeline({
         const soortLabel =
           SOORT_LABEL[ev.soort] || (ev.soort ? String(ev.soort) : null);
         const isNotitie = ev.soort === "notitie";
+        const door =
+          typeof ev.meta?.adviseur_naam === "string"
+            ? ev.meta.adviseur_naam.trim()
+            : "";
         return (
           <li key={ev.id} className="relative pb-4 last:pb-0">
             <span
@@ -101,6 +105,9 @@ export function LeadTimeline({
                 {ev.detail}
               </p>
             )}
+            {door ? (
+              <p className="mt-0.5 text-xs text-muted">Door {door}</p>
+            ) : null}
           </li>
         );
       })}

@@ -10,9 +10,14 @@ import {
   DEFAULT_KOPPELKABEL_EX_BTW,
   DEFAULT_OMVORMER,
   findProductForRegel,
+  isWarmtepompProduct,
   modulesVoorSku,
   type ProductInkoop,
 } from "@/lib/inkoop";
+import {
+  warmtepompCodeFromSku,
+  warmtepompInkoopExcl,
+} from "@/lib/warmtepomp-producten";
 
 function round2(n: number): number {
   return Math.round(n * 100) / 100;
@@ -378,14 +383,32 @@ export function isInkoopProductRegel(
 
 /** Inkoopbedrag ex btw per stuk voor een niet-Alpha productregel. */
 function productInkoopExPerStuk(
-  product: ProductInkoop | null
+  product: ProductInkoop | null,
+  fallbackNaam?: string | null
 ): number {
+  if (!product && !fallbackNaam) return 0;
+  const wpInkoop = warmtepompInkoopExcl({
+    sku: product?.sku,
+    naam: product?.naam || fallbackNaam,
+  });
+  if (wpInkoop != null && wpInkoop > 0) return round2(wpInkoop);
   if (!product) return 0;
   const bat = Number(product.inkoop_batterij || 0);
   const omv = Number(product.inkoop_omvormer || 0);
   if (bat + omv > 0) return round2(bat + omv);
   // Geen Alpha-split bekend: toon catalogusprijs als richtbedrag (niet WF/installatie)
   return round2(Number(product.prijs_ex_btw || 0));
+}
+
+function inkoopSkuLabel(
+  sku: string | null | undefined,
+  omschrijving?: string | null
+): string | null {
+  const code =
+    warmtepompCodeFromSku(sku) ||
+    warmtepompCodeFromSku(omschrijving || "");
+  if (code) return code;
+  return sku || null;
 }
 
 /**
@@ -478,6 +501,30 @@ export function buildInkoopChecklist(
         Number(product.inkoop_omvormer || 0) > 0
       : false;
     const alpha = isAlphaEssRegel(r.omschrijving, product?.sku || r.sku);
+    const wpInkoop = productInkoopExPerStuk(product, r.omschrijving);
+
+    // Warmtepomp: catalogus-inkoop, niet de verkoopprijs / WP-sku-uuid.
+    if (
+      isWarmtepompProduct({
+        sku: product?.sku || r.sku,
+        naam: product?.naam || r.omschrijving,
+      }) ||
+      warmtepompInkoopExcl({
+        sku: product?.sku || r.sku,
+        naam: product?.naam || r.omschrijving,
+      }) != null
+    ) {
+      items.push({
+        key: `regel:${r.id}:product`,
+        label: r.omschrijving.trim(),
+        sku: inkoopSkuLabel(product?.sku || r.sku, r.omschrijving),
+        aantal: n,
+        inkoopExBtw: round2(n * wpInkoop),
+        bron: "offerte",
+        regelId: r.id,
+      });
+      continue;
+    }
 
     // Alpha ESS met inkoop-split: batterij + omvormer apart
     if (product && hasHardware && alpha) {
@@ -560,9 +607,13 @@ export function buildInkoopChecklist(
       items.push({
         key: `regel:${r.id}:product`,
         label: r.omschrijving.trim(),
-        sku: product?.sku || r.sku || null,
+        sku:
+          inkoopSkuLabel(product?.sku || r.sku, r.omschrijving) ||
+          product?.sku ||
+          r.sku ||
+          null,
         aantal: n,
-        inkoopExBtw: round2(n * productInkoopExPerStuk(product)),
+        inkoopExBtw: round2(n * productInkoopExPerStuk(product, r.omschrijving)),
         bron: "offerte",
         regelId: r.id,
       });

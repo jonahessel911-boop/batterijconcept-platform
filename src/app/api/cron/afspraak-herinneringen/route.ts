@@ -500,6 +500,14 @@ async function markVoltooideAfspraken(
       .single();
     if (!lead || !NA_AFSPRAAK_VAN.has(lead.status)) continue;
 
+    const { data: getekend } = await sb
+      .from("offertes")
+      .select("id")
+      .eq("lead_id", a.lead_id)
+      .eq("status", "ondertekend")
+      .limit(1);
+    if (getekend && getekend.length > 0) continue;
+
     const { error: leadErr } = await sb
       .from("leads")
       .update({ status: "na_afspraak" })

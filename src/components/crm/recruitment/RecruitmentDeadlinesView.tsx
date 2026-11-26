@@ -465,20 +465,10 @@ function UitkomstConfirmModal({
 
         <div className="space-y-3 px-4 py-4 text-sm text-ink">
           {isDisk ? (
-            <>
-              <p>
-                Status wordt <strong>Gesprek gehad — diskwalificatie</strong>.
-              </p>
-              <div className="border border-line bg-wash/60 px-3 py-2.5 text-[13px] leading-relaxed text-ink">
-                <p className="text-[10px] font-semibold uppercase tracking-wide text-muted">
-                  Mail naar sollicitant
-                </p>
-                <p className="mt-1.5">
-                  Helaas bent u het niet geworden. We wensen u nog veel succes
-                  in de toekomst.
-                </p>
-              </div>
-            </>
+            <p>
+              Status wordt <strong>Gesprek gehad — diskwalificatie</strong>.
+              Er wordt geen mail naar de sollicitant gestuurd.
+            </p>
           ) : null}
 
           {isTraining ? (

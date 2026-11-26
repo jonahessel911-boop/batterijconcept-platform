@@ -10,6 +10,7 @@ import {
   isSaleUitkomst,
   needsVervolgPunt,
 } from "@/lib/afspraak-soort";
+import { isGeenInteresseStatus, leadStatusLabel } from "@/lib/labels";
 import { inIsoRange, round2 } from "@/lib/management-dashboard/periods";
 import type { DashboardV2Raw } from "./build";
 
@@ -85,7 +86,22 @@ export type DashboardV2Vandaag = {
   orders: number;
   orderwaarde: number;
   leads: number;
+  /** Unieke leads met nieuw huisbezoek in bereik (niet geannuleerd). */
   leadsIngepland: number;
+  /**
+   * Unieke leads afgeboekt op geen-interesse in bereik
+   * (via lead_events status/bel).
+   */
+  leadsGeenInteresse: number;
+  /**
+   * Echt bereikt / gesproken =
+   * uniek(geen interesse ∪ ingepland). Geen-contact telt niet.
+   */
+  leadsBereikt: number;
+  /**
+   * Conversie van bereikte leads = ingepland / bereikt. Procent, 1 decimaal.
+   */
+  conversieBereiktPct: number | null;
   afsprakenGelopen: number;
   afsprakenTeLopen: number;
   afsprakenNietAfgeboekt: number;
@@ -124,8 +140,58 @@ export type VandaagRaw = {
     verzonden_op: string | null;
     created_at: string;
   }[];
+  /**
+   * Status-/bel-events in het vandaag-bereik (voor “bereikt” /
+   * geen-interesse timing).
+   */
+  leadEvents?: {
+    lead_id: string;
+    soort: string;
+    titel: string | null;
+    meta: Record<string, unknown> | null;
+    created_at: string;
+  }[];
   adviseurs: DashboardV2Raw["adviseurs"];
 };
+
+/** Haal lead-statuscode uit status/bel event-meta of titel. */
+function statusFromLeadEvent(ev: {
+  soort: string;
+  titel: string | null;
+  meta: Record<string, unknown> | null;
+}): string | null {
+  const meta = ev.meta;
+  if (meta) {
+    for (const key of [
+      "to",
+      "naar",
+      "status",
+      "uitkomst",
+      "opgeslagenStatus",
+      "gekozenStatus",
+    ] as const) {
+      const v = meta[key];
+      if (typeof v === "string" && v.trim()) return v.trim();
+    }
+  }
+  const titel = (ev.titel || "").trim();
+  const statusArrow = titel.match(/^Status\s*→\s*(.+)$/i);
+  if (statusArrow?.[1]) {
+    const raw = statusArrow[1].trim();
+    if (isGeenInteresseStatus(raw)) return raw;
+    for (const [status, label] of Object.entries(leadStatusLabel)) {
+      if (label === raw) return status;
+    }
+  }
+  const bel = titel.match(/^Belpoging:\s*(.+?)(?:\s*\(|$)/i);
+  if (bel?.[1]) {
+    const raw = bel[1].trim();
+    for (const [status, label] of Object.entries(leadStatusLabel)) {
+      if (label === raw || label.startsWith(raw)) return status;
+    }
+  }
+  return null;
+}
 
 function amsEndOfDay(d: Date): Date {
   const z = toZonedTime(d, TZ);
@@ -297,12 +363,43 @@ export function buildDashboardV2Vandaag(
     );
   }
 
-  const leadsIngepland = afsprakenAll.filter((a) => {
-    if (!afspraakBlokkeertAgenda(a.soort)) return false;
-    if (a.status === "geannuleerd") return false;
+  const ingeplandLeadIds = new Set<string>();
+  for (const a of afsprakenAll) {
+    if (!afspraakBlokkeertAgenda(a.soort)) continue;
+    if (a.status === "geannuleerd") continue;
     const at = a.created_at || a.start_at;
-    return inIsoRange(at, start, end);
-  }).length;
+    if (!inIsoRange(at, start, end)) continue;
+    if (a.lead_id) ingeplandLeadIds.add(a.lead_id);
+  }
+  const leadsIngepland = ingeplandLeadIds.size;
+
+  /** Unieke leads afgeboekt op geen-interesse in bereik (echt gesproken). */
+  const geenInteresseLeadIds = new Set<string>();
+  const adviseurByLead = new Map(
+    raw.leads.map((l) => [l.id, l.adviseur_id ?? null])
+  );
+  for (const ev of raw.leadEvents || []) {
+    if (!inIsoRange(ev.created_at, start, end)) continue;
+    if (ev.soort !== "status" && ev.soort !== "bel") continue;
+    const status = statusFromLeadEvent(ev);
+    if (!isGeenInteresseStatus(status)) continue;
+    if (personId) {
+      const aid = adviseurByLead.get(ev.lead_id);
+      if (aid !== personId) continue;
+    }
+    if (ev.lead_id) geenInteresseLeadIds.add(ev.lead_id);
+  }
+  const leadsGeenInteresse = geenInteresseLeadIds.size;
+
+  const bereiktLeadIds = new Set<string>([
+    ...ingeplandLeadIds,
+    ...geenInteresseLeadIds,
+  ]);
+  const leadsBereikt = bereiktLeadIds.size;
+  const conversieBereiktPct =
+    leadsBereikt > 0
+      ? Math.round((leadsIngepland / leadsBereikt) * 1000) / 10
+      : null;
 
   // Alleen echt verstuurde offertes vandaag — niet updated_at, niet onderteken-datum
   const verstuurdIds = new Set<string>();
@@ -546,6 +643,9 @@ export function buildDashboardV2Vandaag(
     orderwaarde: round2(orderwaarde),
     leads: leads.length,
     leadsIngepland,
+    leadsGeenInteresse,
+    leadsBereikt,
+    conversieBereiktPct,
     afsprakenGelopen,
     afsprakenTeLopen,
     afsprakenNietAfgeboekt,

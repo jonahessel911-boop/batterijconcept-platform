@@ -7,6 +7,7 @@ import {
   consolidateOpenSalesWeekCreditfacturen,
   stripAllHoldSalesFromOpenSalesCreditfacturen,
 } from "@/lib/netto-creditfactuur";
+import { ensureAanbetalingCommissieClawbacks } from "@/lib/aanbetaling-commissie-clawback";
 import { ensureBelEnOpsUitbetalingConcepten } from "@/lib/callcenter-uitbetalingen";
 import {
   isBelcommissieCreditfactuur,
@@ -70,11 +71,13 @@ export async function POST() {
     await stripAllHoldSalesFromOpenSalesCreditfacturen(sb);
     await consolidateOpenSalesWeekCreditfacturen(sb);
     const belOps = await ensureBelEnOpsUitbetalingConcepten(sb);
+    const clawback = await ensureAanbetalingCommissieClawbacks(sb);
 
     return NextResponse.json({
       ok: true,
       geannuleerd,
       bel_ops: belOps ?? null,
+      clawback,
     });
   } catch (e) {
     return NextResponse.json(

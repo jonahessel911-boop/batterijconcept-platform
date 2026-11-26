@@ -16,18 +16,6 @@ import {
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from "@/components/ui/dialog";
-import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
-import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
-import { Textarea } from "@/components/ui/textarea";
-import {
   Item,
   ItemContent,
   ItemDescription,
@@ -61,10 +49,10 @@ import { isAanbetalingFactuurOmschrijving } from "@/lib/aanbetaling";
 import { formatEuro } from "@/lib/format";
 import { parseTcSwissIntakeStored } from "@/lib/tcswiss-intake";
 import {
-  AANBETALING_AFSPRAAK_KEY,
-  serializeAanbetalingAfspraak,
-  type AanbetalingAfspraakSoort,
-} from "@/lib/aanbetaling-afspraak";
+  isWarmtepompOrder,
+  tcSwissDoorgestuurdTekst,
+  warmtepompProductNaamVanProject,
+} from "@/lib/project-product";
 
 function toDatetimeLocalValue(iso: string | null | undefined): string {
   if (!iso) return "";
@@ -137,12 +125,6 @@ export function ProjectKickoffChecklist({
   );
   const [checkingId, setCheckingId] = useState<KickoffItemId | null>(null);
   const [confirmId, setConfirmId] = useState<KickoffItemId | null>(null);
-  const [afspraakOpen, setAfspraakOpen] = useState(false);
-  const [afspraakSoort, setAfspraakSoort] =
-    useState<AanbetalingAfspraakSoort>("datum");
-  const [afspraakDatum, setAfspraakDatum] = useState("");
-  const [afspraakNotitie, setAfspraakNotitie] = useState("");
-  const [afspraakBusy, setAfspraakBusy] = useState(false);
   const [wpApplicable, setWpApplicable] = useState(false);
   const [wpSent, setWpSent] = useState(false);
   const [wpConfigured, setWpConfigured] = useState(true);
@@ -153,10 +135,17 @@ export function ProjectKickoffChecklist({
   } | null>(null);
   const [tcswissLookup, setTcswissLookup] = useState<string | null>(null);
   const [tcswissLookupBusy, setTcswissLookupBusy] = useState(false);
+  const [wpProductNaam, setWpProductNaam] = useState(() =>
+    warmtepompProductNaamVanProject(project)
+  );
 
+  const wpFromProject = isWarmtepompOrder(project);
   const kickoffExtra: KickoffExtra = useMemo(
-    () => ({ warmtepomp: wpApplicable, tcswissSent: wpSent }),
-    [wpApplicable, wpSent]
+    () => ({
+      warmtepomp: wpApplicable || wpFromProject,
+      tcswissSent: wpSent,
+    }),
+    [wpApplicable, wpSent, wpFromProject]
   );
 
   useEffect(() => {
@@ -168,12 +157,14 @@ export function ProjectKickoffChecklist({
           applicable?: boolean;
           sent?: boolean;
           configured?: boolean;
+          productNaam?: string | null;
         };
         if (cancelled) return;
         if (!res.ok) return;
         setWpApplicable(Boolean(data.applicable));
         setWpSent(Boolean(data.sent));
         setWpConfigured(data.configured !== false);
+        if (data.productNaam) setWpProductNaam(data.productNaam);
       } catch {
         /* geen extra stap als status niet te laden is */
       }
@@ -215,79 +206,6 @@ export function ProjectKickoffChecklist({
   const offerteId = off?.id || project.offerte_id || null;
   const draftAanbetaling = aanbetalingConcept(facturen);
   const wf = isWarmtefondsProject(project);
-
-  function openBetaalafspraak() {
-    setAfspraakSoort(wf ? "edwin_wf" : "datum");
-    setAfspraakDatum("");
-    setAfspraakNotitie("");
-    setAfspraakOpen(true);
-  }
-
-  async function saveBetaalafspraak() {
-    if (afspraakSoort === "datum" && !/^\d{4}-\d{2}-\d{2}$/.test(afspraakDatum)) {
-      setActionError("Kies de datum waarop de klant betaalt.");
-      return;
-    }
-    setAfspraakBusy(true);
-    setActionError(null);
-    try {
-      const nextChecks = {
-        ...(project.materiaal_checks || {}),
-        [AANBETALING_AFSPRAAK_KEY]: serializeAanbetalingAfspraak({
-          soort: afspraakSoort,
-          datum: afspraakSoort === "datum" ? afspraakDatum : null,
-          notitie: afspraakNotitie.trim() || null,
-          at: new Date().toISOString(),
-        }),
-      };
-      const res = await fetch(`/api/projecten/${project.id}`, {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ materiaal_checks: nextChecks }),
-      });
-      const data = await res.json().catch(() => ({}));
-      if (!res.ok) {
-        throw new Error(
-          (data as { error?: string }).error || "Afspraak opslaan mislukt"
-        );
-      }
-      const updated = (data as { project?: Project }).project;
-      const base = updated || {
-        ...project,
-        materiaal_checks: nextChecks,
-      };
-
-      const fac =
-        draftAanbetaling ||
-        facturen.find(
-          (f) =>
-            !f.credit_van_factuur_id &&
-            isAanbetalingFactuurOmschrijving(f.omschrijving)
-        );
-      if (fac && afspraakSoort === "datum") {
-        await fetch(`/api/facturen/${fac.id}`, {
-          method: "PATCH",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ afgesproken_betaaldatum: afspraakDatum }),
-        }).catch(() => null);
-      }
-
-      const finalized = await finalizeKickoffIfReady(base, facturen);
-      if (!finalized && updated) onProjectUpdated?.(updated);
-      setAfspraakOpen(false);
-      setActionHint(
-        afspraakSoort === "edwin_wf"
-          ? "Betaalafspraak: klant betaalt bij Edwin als Warmtefonds rond is. Geen Acties-opvolging."
-          : `Betaalafspraak gezet op ${afspraakDatum}. Geen Acties-opvolging.`
-      );
-    } catch (e) {
-      setActionError(
-        e instanceof Error ? e.message : "Afspraak opslaan mislukt"
-      );
-    } finally {
-      setAfspraakBusy(false);
-    }
-  }
 
   async function afvinkEdwinIntake() {
     setAfvinkBusy(true);
@@ -462,6 +380,8 @@ export function ProjectKickoffChecklist({
       lead?: string | null;
       externId?: string | null;
       materiaal_checks?: Record<string, boolean | string>;
+      productNaam?: string | null;
+      doorgestuurdTekst?: string;
     };
     if (!res.ok) {
       throw new Error(data.error || "Inschieten bij TC Swiss mislukt");
@@ -478,11 +398,13 @@ export function ProjectKickoffChecklist({
       duplicate: Boolean(data.alreadySent || data.duplicate),
     };
     setTcswissResult(result);
+    if (data.productNaam) setWpProductNaam(data.productNaam);
     const leadLabel = result.lead ? ` · ${result.lead}` : "";
     const notice =
       result.duplicate
         ? `Al bekend bij TC Swiss${leadLabel}`
-        : `Doorgestuurd naar TC Swiss${leadLabel}`;
+        : data.doorgestuurdTekst ||
+          tcSwissDoorgestuurdTekst(data.productNaam || wpProductNaam);
     onProjectUpdated?.(nextProject, notice);
     const finalized = await finalizeKickoffIfReady(nextProject, facturen, {
       warmtepomp: true,
@@ -788,8 +710,8 @@ export function ProjectKickoffChecklist({
             <AlertDialogHeader>
               <AlertDialogTitle>
                 {tcswissResult.duplicate
-                  ? "Al bekend bij TC Swiss"
-                  : "Doorgestuurd naar TC Swiss"}
+                  ? `Al bekend bij TC Swiss - ${wpProductNaam}`
+                  : tcSwissDoorgestuurdTekst(wpProductNaam)}
               </AlertDialogTitle>
               <AlertDialogDescription>
                 Dit is hun antwoord. Met het leadnummer kun je later dezelfde
@@ -860,112 +782,6 @@ export function ProjectKickoffChecklist({
         )}
       </AlertDialogContent>
     </AlertDialog>
-  );
-
-  const afspraakDialog = (
-    <Dialog open={afspraakOpen} onOpenChange={setAfspraakOpen}>
-      <DialogContent className="sm:max-w-md">
-        <DialogHeader>
-          <DialogTitle>
-            {wf ? "BTW-factuur — betaalafspraak" : "Aanbetaling — betaalafspraak"}
-          </DialogTitle>
-          <DialogDescription>
-            Leg vast hoe de klant later betaalt. Opstarten telt deze stap af;
-            er komt geen Acties-kaart (geen nabellen, geen herinnering).
-          </DialogDescription>
-        </DialogHeader>
-        <div className="space-y-3">
-          <RadioGroup
-            value={afspraakSoort}
-            onValueChange={(v) => {
-              const value = Array.isArray(v) ? v[0] : v;
-              if (value === "edwin_wf" || value === "datum") {
-                setAfspraakSoort(value);
-              }
-            }}
-          >
-            {wf ? (
-              <Label
-                className={
-                  afspraakSoort === "edwin_wf"
-                    ? "flex cursor-pointer items-start gap-3 rounded-lg border border-primary bg-primary/5 p-3 font-normal"
-                    : "flex cursor-pointer items-start gap-3 rounded-lg border p-3 font-normal"
-                }
-              >
-                <RadioGroupItem value="edwin_wf" className="mt-0.5" />
-                <span>
-                  <span className="block text-sm font-medium">
-                    Betaalt bij Edwin
-                  </span>
-                  <span className="mt-0.5 block text-xs text-muted-foreground">
-                    Als het Warmtefonds geregeld is. Edwin int; wij wachten.
-                  </span>
-                </span>
-              </Label>
-            ) : null}
-            <Label
-              className={
-                afspraakSoort === "datum"
-                  ? "flex cursor-pointer items-start gap-3 rounded-lg border border-primary bg-primary/5 p-3 font-normal"
-                  : "flex cursor-pointer items-start gap-3 rounded-lg border p-3 font-normal"
-              }
-            >
-              <RadioGroupItem value="datum" className="mt-0.5" />
-              <span>
-                <span className="block text-sm font-medium">
-                  Betaalt op een datum
-                </span>
-                <span className="mt-0.5 block text-xs text-muted-foreground">
-                  Bijv. salaris. Geen opvolging in Acties op die dag.
-                </span>
-              </span>
-            </Label>
-          </RadioGroup>
-          {afspraakSoort === "datum" ? (
-            <div className="space-y-1.5">
-              <Label htmlFor="btw-afspraak-datum">Betaaldatum</Label>
-              <Input
-                id="btw-afspraak-datum"
-                type="date"
-                value={afspraakDatum}
-                onChange={(e) => setAfspraakDatum(e.target.value)}
-              />
-            </div>
-          ) : null}
-          <div className="space-y-1.5">
-            <Label htmlFor="btw-afspraak-notitie">Toelichting (optioneel)</Label>
-            <Textarea
-              id="btw-afspraak-notitie"
-              rows={2}
-              placeholder={
-                afspraakSoort === "edwin_wf"
-                  ? "Bijv. betaalt bij Edwin als WF rond is"
-                  : "Bijv. salaris op de 25e"
-              }
-              value={afspraakNotitie}
-              onChange={(e) => setAfspraakNotitie(e.target.value)}
-            />
-          </div>
-        </div>
-        <DialogFooter>
-          <Button
-            type="button"
-            variant="outline"
-            onClick={() => setAfspraakOpen(false)}
-            disabled={afspraakBusy}
-          >
-            Annuleren
-          </Button>
-          <Button
-            type="button"
-            disabled={afspraakBusy}
-            onClick={() => void saveBetaalafspraak()}
-          >
-            {afspraakBusy ? "Bezig…" : "Vastleggen"}
-          </Button>
-        </DialogFooter>
-      </DialogContent>
-    </Dialog>
   );
 
   if (compact) {
@@ -1070,17 +886,6 @@ export function ProjectKickoffChecklist({
                           ? "Stuur naar TC Swiss"
                           : "Check"}
                     </Button>
-                    {item.id === "aanbetaling" ? (
-                      <Button
-                        type="button"
-                        size="sm"
-                        variant="outline"
-                        disabled={afspraakBusy}
-                        onClick={openBetaalafspraak}
-                      >
-                        Afspraak
-                      </Button>
-                    ) : null}
                   </div>
                 ) : null}
               </Item>
@@ -1088,7 +893,6 @@ export function ProjectKickoffChecklist({
           })}
         </ItemGroup>
         {confirmDialog}
-        {afspraakDialog}
       </div>
     );
   }
@@ -1172,17 +976,6 @@ export function ProjectKickoffChecklist({
                         ? "Stuur naar TC Swiss"
                         : "Check"}
                   </Button>
-                  {item.id === "aanbetaling" ? (
-                    <Button
-                      type="button"
-                      size="sm"
-                      variant="outline"
-                      disabled={afspraakBusy}
-                      onClick={openBetaalafspraak}
-                    >
-                      Betaalafspraak
-                    </Button>
-                  ) : null}
                 </div>
               )}
             </li>
@@ -1236,7 +1029,6 @@ export function ProjectKickoffChecklist({
         </ul>
       ) : null}
       {confirmDialog}
-      {afspraakDialog}
     </section>
   );
 }

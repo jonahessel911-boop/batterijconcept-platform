@@ -164,6 +164,17 @@ function barTotal(b: BelConversieSeriesBucket): number {
   return Math.max(0, b.gebeld + (b.geannuleerd || 0));
 }
 
+/** Bereikt = ingepland + geen interesse (geen contact telt niet). */
+function conversieBereiktPct(
+  ingepland: number,
+  geenInteresse: number
+): number | null {
+  const bereikt =
+    Math.max(0, Math.round(ingepland)) + Math.max(0, Math.round(geenInteresse));
+  if (bereikt <= 0) return null;
+  return Math.round((ingepland / bereikt) * 1000) / 10;
+}
+
 function BelSeriesChart({
   series,
   granularity,
@@ -240,25 +251,29 @@ function BelSeriesChart({
   return (
     <div className="overflow-x-auto">
       <div ref={wrapRef} className="relative min-w-[22rem]" onMouseLeave={clearTip}>
-        {/* L→A % boven de plot */}
+        {/* Conversie op bereikt % boven de plot */}
         <div className="mb-1 flex justify-around gap-3 px-1 sm:gap-4">
-          {series.map((b) => (
-            <div
-              key={`l2a-${b.key}`}
-              className="min-w-[3.75rem] flex-1 text-center sm:min-w-[4.5rem]"
-            >
-              <p
-                className="text-[11px] font-semibold tabular-nums text-green-dark"
-                title={
-                  b.cohortLeads != null
-                    ? `L→A cohort: ${b.cohortAppointed ?? 0}/${b.cohortLeads} leads die die dag binnenkwamen`
-                    : "Lead to appointment % (leads van die dag)"
-                }
+          {series.map((b) => {
+            const conv = conversieBereiktPct(b.ingepland, b.geenInteresse);
+            const bereikt = Math.max(0, b.ingepland) + Math.max(0, b.geenInteresse);
+            return (
+              <div
+                key={`conv-${b.key}`}
+                className="min-w-[3.75rem] flex-1 text-center sm:min-w-[4.5rem]"
               >
-                {b.leadToAppt != null ? `${num(b.leadToAppt, 1)}%` : "—"}
-              </p>
-            </div>
-          ))}
+                <p
+                  className="text-[11px] font-semibold tabular-nums text-green-dark"
+                  title={
+                    conv != null
+                      ? `Conversie bereikt: ${b.ingepland}/${bereikt} (ingepland / gesproken)`
+                      : "Geen bereikte leads"
+                  }
+                >
+                  {conv != null ? `${num(conv, 1)}%` : "—"}
+                </p>
+              </div>
+            );
+          })}
         </div>
 
         {/* Plot: staven + doellijn delen dezelfde hoogte-schaal */}
@@ -359,6 +374,14 @@ function BelSeriesChart({
             className="pointer-events-none absolute z-30 w-max max-w-[14rem] rounded-xl border border-line bg-white px-3 py-2.5 text-xs shadow-lg"
             style={tipStyle}
           >
+            {(() => {
+              const convTip = conversieBereiktPct(
+                tip.ingepland,
+                tip.geenInteresse
+              );
+              const bereiktTip = tip.ingepland + tip.geenInteresse;
+              return (
+            <>
             <p className="font-semibold text-ink">{tip.label}</p>
             <ul className="mt-1.5 space-y-1 tabular-nums text-ink">
               <li>
@@ -382,9 +405,21 @@ function BelSeriesChart({
                 </li>
               ) : null}
               <li>
+                Conversie bereikt{" "}
+                <span className="font-semibold text-green-dark">
+                  {convTip != null ? `${num(convTip, 1)}%` : "—"}
+                </span>
+                {bereiktTip > 0 ? (
+                  <span className="text-muted">
+                    {" "}
+                    ({num(tip.ingepland)}/{num(bereiktTip)})
+                  </span>
+                ) : null}
+              </li>
+              <li>
                 L→A leads{" "}
                 {granularity === "week" ? "die week" : "die dag"}{" "}
-                <span className="font-semibold text-green-dark">
+                <span className="font-semibold">
                   {tip.leadToAppt != null ? `${num(tip.leadToAppt, 1)}%` : "—"}
                 </span>
                 {tip.cohortLeads != null && tip.cohortLeads > 0 ? (
@@ -424,6 +459,9 @@ function BelSeriesChart({
                 </span>
               </li>
             </ul>
+            </>
+              );
+            })()}
           </div>
         ) : null}
       </div>
@@ -447,6 +485,10 @@ function BelSeriesChart({
         <span className="inline-flex items-center gap-1.5">
           <span className="inline-block h-0.5 w-4 border-t-2 border-dashed border-[#C45A12]" />
           Doel (ingepland)
+        </span>
+        <span className="inline-flex items-center gap-1.5">
+          <span className="font-semibold tabular-nums text-green-dark">%</span>
+          Conversie bereikt
         </span>
       </div>
     </div>
@@ -593,7 +635,18 @@ export function BelConversiePanel() {
       geannuleerd + ingepland > 0
         ? Math.round((geannuleerd / (geannuleerd + ingepland)) * 1000) / 10
         : null;
-    return { geenInteresse, geenContact, ingepland, geannuleerd, annuleringsPct: uitval, doel };
+    const conversieBereikt = conversieBereiktPct(ingepland, geenInteresse);
+    const bereikt = Math.max(0, ingepland) + Math.max(0, geenInteresse);
+    return {
+      geenInteresse,
+      geenContact,
+      ingepland,
+      geannuleerd,
+      annuleringsPct: uitval,
+      doel,
+      conversieBereikt,
+      bereikt,
+    };
   }, [series]);
 
   /**
@@ -865,7 +918,7 @@ export function BelConversiePanel() {
         </>
       ) : data ? (
         <>
-          <div className="grid grid-cols-2 gap-3 lg:grid-cols-3 xl:grid-cols-9">
+          <div className="grid grid-cols-2 gap-3 lg:grid-cols-3 xl:grid-cols-5">
             <div className="rounded-2xl border border-line bg-white p-4">
               <p className="text-[11px] font-semibold uppercase tracking-[0.14em] text-muted">
                 Totaal
@@ -987,9 +1040,25 @@ export function BelConversiePanel() {
             </div>
             <div className="rounded-2xl border border-green/30 bg-white p-4">
               <p className="text-[11px] font-semibold uppercase tracking-[0.14em] text-muted">
-                Lead to appointment
+                Conversie bereikt
               </p>
               <p className="mt-1 font-display text-3xl font-semibold tabular-nums text-green-dark">
+                {seriesSums.conversieBereikt != null
+                  ? `${num(seriesSums.conversieBereikt, 1)}%`
+                  : "—"}
+              </p>
+              <p className="mt-1 text-xs text-muted">
+                Ingepland / gesproken
+                {seriesSums.bereikt > 0
+                  ? ` · ${num(seriesSums.ingepland)}/${num(seriesSums.bereikt)}`
+                  : ""}
+              </p>
+            </div>
+            <div className="rounded-2xl border border-line bg-white p-4">
+              <p className="text-[11px] font-semibold uppercase tracking-[0.14em] text-muted">
+                Lead to appointment
+              </p>
+              <p className="mt-1 font-display text-3xl font-semibold tabular-nums text-ink">
                 {totals?.leadToAppt != null
                   ? `${num(totals.leadToAppt, 1)}%`
                   : "—"}
@@ -1081,6 +1150,12 @@ export function BelConversiePanel() {
                       Doel
                     </th>
                   ) : null}
+                  <th
+                    className="px-3 py-2.5 font-semibold tabular-nums"
+                    title="Ingepland / (ingepland + geen interesse)"
+                  >
+                    Conv. bereikt
+                  </th>
                   <th className="px-3 py-2.5 font-semibold tabular-nums">
                     L→A % (inkomende leads)
                   </th>
@@ -1102,7 +1177,7 @@ export function BelConversiePanel() {
                 {series.length === 0 ? (
                   <tr>
                     <td
-                      colSpan={showTeamExtras ? 9 : 8}
+                      colSpan={showTeamExtras ? 10 : 9}
                       className="px-4 py-8 text-center text-sm text-muted"
                     >
                       Geen data in deze periode.
@@ -1135,6 +1210,18 @@ export function BelConversiePanel() {
                         </td>
                       ) : null}
                       <td className="px-3 py-2.5 font-semibold tabular-nums text-green-dark">
+                        {conversieBereiktPct(b.ingepland, b.geenInteresse) !=
+                        null
+                          ? `${num(
+                              conversieBereiktPct(
+                                b.ingepland,
+                                b.geenInteresse
+                              ),
+                              1
+                            )}%`
+                          : "—"}
+                      </td>
+                      <td className="px-3 py-2.5 tabular-nums text-ink">
                         {b.leadToAppt != null
                           ? `${num(b.leadToAppt, 1)}%`
                           : "—"}

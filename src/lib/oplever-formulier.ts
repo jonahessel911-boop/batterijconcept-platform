@@ -101,7 +101,7 @@ export type OpleverFormulierData = {
   vervolgActie: string;
   /** Materiaal dat purchasing moet inkopen voor dit serviceverzoek. */
   vervolgMaterialen: OpleverVervolgMateriaal[];
-  /** Legacy: werd direct ingepland; BO plant nu later. */
+  /** Voorgesteld / geboekt service-moment (ISO of datetime-local). */
   vervolgAt: string;
   vervolgMonteurId: string;
   vervolgMonteurNaam: string;
@@ -241,6 +241,13 @@ export function validateOpleverFormulier(
   if (data.vervolgNodig) {
     if (!data.vervolgActie.trim()) {
       return "Beschrijf wat er nog gefixt moet worden";
+    }
+    if (!data.vervolgAt.trim()) {
+      return "Kies datum en tijd voor het service-vervolg";
+    }
+    const at = new Date(data.vervolgAt.trim());
+    if (Number.isNaN(at.getTime())) {
+      return "Ongeldige datum/tijd voor het service-vervolg";
     }
   }
   return null;

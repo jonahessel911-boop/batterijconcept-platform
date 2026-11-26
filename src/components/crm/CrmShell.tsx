@@ -56,11 +56,16 @@ import { CallPopupHost } from "./CallPopupHost";
 import { LEAD_STATUSES, leadStatusLabel } from "@/lib/labels";
 import {
   MAX_BELPOGINGEN,
+  belpogingenOf,
   definitiefGeenContactDbHint,
   buildGeenContactOutcomePatch,
   inBelQueue,
   isTerugbelDue,
 } from "@/lib/bel-queue";
+import {
+  belUitkomstEventPayload,
+  isBelTabAfboekStatus,
+} from "@/lib/bel-uitkomst-log";
 import { normalizeAfspraakSoort } from "@/lib/afspraak-soort";
 import { appendLeadNotitie } from "@/lib/lead-notitie";
 import {
@@ -95,6 +100,7 @@ import { AdviseursContactLijst } from "./AdviseursContactLijst";
 import { AdviseurInstellingenPanel } from "./AdviseurInstellingenPanel";
 import { magTodayDashboard } from "@/lib/admin-adviseur";
 import { SalesCockpitPanel } from "./SalesCockpitPanel";
+import { UitbetalingenOverzichtPanel } from "./UitbetalingenOverzichtPanel";
 
 const VALID_TABS: CrmTab[] = [
   "today",
@@ -109,6 +115,7 @@ const VALID_TABS: CrmTab[] = [
   "instroom",
   "projecten",
   "facturen",
+  "uitbetalingen",
   "creditfacturen",
   "inkomend",
   "inbox",
@@ -153,6 +160,7 @@ function parseLeadStatus(value: string | null): LeadStatus | "" {
 export function CrmShell() {
   const router = useRouter();
   const searchParams = useSearchParams();
+  const searchKey = searchParams.toString();
   const urlTab = parseTab(searchParams.get("tab"));
   const salesCockpitFullscreen =
     urlTab === "sales_cockpit" && searchParams.get("fs") === "1";
@@ -170,11 +178,11 @@ export function CrmShell() {
     if (searchParams.get("tab") === "service") {
       setBoViewStore("service");
     }
-  }, [searchParams, router]);
+  }, [searchKey, router]);
 
   useEffect(() => {
     rememberCrmReturnUrl();
-  }, [tab, searchParams]);
+  }, [tab, searchKey]);
 
   useEffect(() => {
     const pageNames: Partial<Record<CrmTab, string>> = {
@@ -190,6 +198,7 @@ export function CrmShell() {
       instroom: "Recruitment",
       projecten: "Backoffice",
       facturen: "Facturen",
+      uitbetalingen: "Uitbetalingen",
       creditfacturen: "Creditfacturen",
       inkomend: "Inkomend",
       inbox: "Inbox",
@@ -391,8 +400,12 @@ export function CrmShell() {
     if (first === "leads") params.delete("tab");
     else params.set("tab", first);
     const qs = params.toString();
-    router.replace(qs ? `/?${qs}` : "/", { scroll: false });
-  }, [sessionUser, userRol, tab, visibleTabIds, searchParams, router]);
+    const nextUrl = qs ? `/?${qs}` : "/";
+    if (`/?${searchKey}` === nextUrl || (searchKey === "" && nextUrl === "/")) {
+      return;
+    }
+    router.replace(nextUrl, { scroll: false });
+  }, [sessionUser, userRol, tab, visibleTabIds, searchKey, router]);
 
   // Ongkoppelde leads eenmalig → Admin
   useEffect(() => {
@@ -499,7 +512,7 @@ export function CrmShell() {
         : "taken"
     );
     router.replace(`/?${params.toString()}`, { scroll: false });
-  }, [sessionReady, userRol, sessionUser?.email, searchParams, router]);
+  }, [sessionReady, userRol, sessionUser?.email, searchKey, router]);
 
   // Adviseur: start op maandleaderboard; inactief → agenda (afblokken)
   useEffect(() => {
@@ -513,7 +526,7 @@ export function CrmShell() {
       sessionUser?.actief === false ? "agenda" : "leaderboard"
     );
     router.replace(`/?${params.toString()}`, { scroll: false });
-  }, [sessionReady, userRol, sessionUser?.actief, searchParams, router]);
+  }, [sessionReady, userRol, sessionUser?.actief, searchKey, router]);
 
   function changeStatusFilter(next: string) {
     const params = new URLSearchParams(searchParams.toString());
@@ -1116,13 +1129,14 @@ export function CrmShell() {
         }
       }
 
+      const opgeslagenStatus = gc?.patch.status ?? status;
       void fetch(`/api/leads/${leadId}/events`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           soort: "status",
           titel: `Status → ${
-            leadStatusLabel[gc?.patch.status ?? status] || status
+            leadStatusLabel[opgeslagenStatus] || opgeslagenStatus
           }`,
           detail:
             status === "geen_contact" && gc
@@ -1134,6 +1148,24 @@ export function CrmShell() {
                 : null,
         }),
       }).catch(() => {});
+      if (isBelTabAfboekStatus(status) || isBelTabAfboekStatus(opgeslagenStatus)) {
+        void fetch(`/api/leads/${leadId}/events`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(
+            belUitkomstEventPayload({
+              gekozenStatus: status,
+              opgeslagenStatus,
+              pogingen: gc?.pogingen ?? belpogingenOf(current),
+              maxPogingen: MAX_BELPOGINGEN,
+              definitief: Boolean(gc?.definitief),
+              bron: "leads",
+              extraDetail:
+                status === "niet_gekwalificeerd" ? notities : null,
+            })
+          ),
+        }).catch(() => {});
+      }
 
       if (gc?.sendGeenContactMail && current.email?.trim()) {
         void fetch(`/api/leads/${leadId}/geen-contact-mail`, {
@@ -1437,6 +1469,10 @@ export function CrmShell() {
           : filterLabel
             ? `Facturen van ${filterLabel}`
             : "Betalingen en openstaande posten",
+    },
+    uitbetalingen: {
+      title: "Uitbetalingen",
+      sub: "Commissie per persoon · groen uitbetaald · oranje open · blauw rest",
     },
     creditfacturen: {
       title: "Creditfacturen",
@@ -1790,6 +1826,7 @@ export function CrmShell() {
               tab !== "partners" &&
               tab !== "adviseurs" &&
               tab !== "purchasing" &&
+              tab !== "uitbetalingen" &&
               tab !== "ai" &&
               tab !== "voice_ai" &&
               tab !== "netto" &&
@@ -2057,6 +2094,7 @@ export function CrmShell() {
                   </div>
                 )}
                 {tab === "purchasing" && <PurchasingPanel />}
+                {tab === "uitbetalingen" && <UitbetalingenOverzichtPanel />}
                 {tab === "sales_cockpit" && (
                   <SalesCockpitPanel
                     onOpenMenu={() => setSidebarMobileOpen(true)}

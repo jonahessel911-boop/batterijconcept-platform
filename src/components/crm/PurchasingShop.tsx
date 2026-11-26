@@ -298,6 +298,7 @@ export function PurchasingShop({
               </p>
               <Link
                 href={`/projecten/${order.id}?from=purchasing`}
+                prefetch={false}
                 className="font-medium text-green-dark underline-offset-2 hover:underline"
               >
                 Open project

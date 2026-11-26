@@ -126,6 +126,7 @@ import { addDays } from "date-fns";
 import { formatInTimeZone, fromZonedTime } from "date-fns-tz";
 import { nl } from "date-fns/locale";
 import { AMSTERDAM_TZ } from "@/lib/format";
+import { isWarmtepompOrder } from "@/lib/project-product";
 
 function isOverstapNazorgTaak(taak: ProjectTaak): boolean {
   const key = (taak.auto_key || "").toLowerCase();
@@ -4289,6 +4290,7 @@ export function BackofficeActiesList({
                     }
                     aanbetalingInc={bedragen.aanbetalingInc}
                     warmtefondsInc={bedragen.warmtefondsInc}
+                    warmtepomp={isWarmtepompOrder(actie.project)}
                     restantFactuurStatus={
                       projectFacturen.find(
                         (f) =>

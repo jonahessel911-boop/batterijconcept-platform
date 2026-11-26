@@ -29,6 +29,8 @@ type Props = {
   /** Warmtefonds: restantfactuur-knop tonen. */
   offerteId?: string | null;
   warmtefonds?: boolean;
+  /** Warmtepomp: geen € 8.500-plafond op de WF-restantfactuur. */
+  warmtepomp?: boolean;
   financieringStatus?: string | null;
   /** Huidige projectstatus (voor €0 → Opstarten WF). */
   projectStatus?: string | null;
@@ -46,6 +48,7 @@ export function ProjectFinancieelSection({
   onFacturenChanged,
   offerteId = null,
   warmtefonds = false,
+  warmtepomp = false,
   financieringStatus = null,
   projectStatus = null,
   aanbetalingTeInnenInc = null,
@@ -421,7 +424,9 @@ export function ProjectFinancieelSection({
                 title={
                   magWarmtefondsRestantFactuur(financieringStatus) ||
                   financieringStatus === "afgewezen"
-                    ? "Concept-restantfactuur (max. € 8.500 bij Warmtefonds)"
+                    ? warmtepomp
+                      ? "Concept-restantfactuur (bedrag via Warmtefonds)"
+                      : "Concept-restantfactuur (max. € 8.500 bij Warmtefonds)"
                     : "Pas na Warmtefonds-goedkeuring"
                 }
                 onClick={() => void createRestantFactuur()}
@@ -451,8 +456,9 @@ export function ProjectFinancieelSection({
           !magWarmtefondsRestantFactuur(financieringStatus) &&
           financieringStatus !== "afgewezen" ? (
             <p className="mb-3 text-[11px] text-muted">
-              Restantfactuur Warmtefonds (max. € 8.500) pas na “Aanvraag
-              goedgekeurd” in Financiering.
+              {warmtepomp
+                ? "Restantfactuur Warmtefonds pas na “Aanvraag goedgekeurd” in Financiering."
+                : "Restantfactuur Warmtefonds (max. € 8.500) pas na “Aanvraag goedgekeurd” in Financiering."}
             </p>
           ) : null}
 

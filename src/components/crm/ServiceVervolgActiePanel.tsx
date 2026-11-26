@@ -30,6 +30,29 @@ function datetimeLocalToIso(value: string): string {
   return d.toISOString();
 }
 
+function isoToDatetimeLocal(value: string | null | undefined): string {
+  const t = (value || "").trim();
+  if (!t) return "";
+  // Al datetime-local
+  if (/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}/.test(t) && !t.endsWith("Z") && !/[+-]\d{2}:\d{2}$/.test(t)) {
+    return t.slice(0, 16);
+  }
+  const d = new Date(t);
+  if (Number.isNaN(d.getTime())) return "";
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    timeZone: AMSTERDAM_TZ,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+  }).formatToParts(d);
+  const get = (type: string) =>
+    parts.find((p) => p.type === type)?.value || "";
+  return `${get("year")}-${get("month")}-${get("day")}T${get("hour")}:${get("minute")}`;
+}
+
 export function ServiceVervolgActiePanel({
   project,
   telefoon,
@@ -47,13 +70,16 @@ export function ServiceVervolgActiePanel({
   const [rows, setRows] = useState<ServiceInkoopRegel[]>(() =>
     parseServiceInkoopRegels(project.materiaal_checks)
   );
-  const [when, setWhen] = useState("");
+  const [when, setWhen] = useState(() =>
+    isoToDatetimeLocal(project.service_at || snap?.vervolgAt || "")
+  );
   const [busy, setBusy] = useState<"mat" | "plan" | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [msg, setMsg] = useState<string | null>(null);
 
   const wat = snap?.vervolgActie?.trim() || "Restpunt na oplevering.";
   const tel = (telefoon || "").trim();
+  const alIngepland = Boolean(project.service_at);
 
   const dirty = useMemo(() => {
     const a = JSON.stringify(parseServiceInkoopRegels(project.materiaal_checks));
@@ -170,10 +196,19 @@ export function ServiceVervolgActiePanel({
           Serviceverzoek · Vervolg Opleverformulier
         </p>
         <p className="mt-0.5 text-[12px] leading-relaxed text-muted">
-          Restpunt na oplevering. Bel de klant om een service-moment in te
-          plannen (geen mail).
+          Restpunt na oplevering.
+          {alIngepland
+            ? " Service-moment staat al op het planbord (van opleverformulier)."
+            : " Bel de klant of bevestig het voorgestelde moment (geen mail)."}
         </p>
         <p className="mt-2 whitespace-pre-wrap text-sm text-ink">{wat}</p>
+        {snap?.vervolgAt ? (
+          <p className="mt-1 text-xs text-muted">
+            Voorgesteld:{" "}
+            {isoToDatetimeLocal(snap.vervolgAt).replace("T", " ") ||
+              snap.vervolgAt}
+          </p>
+        ) : null}
         {tel ? (
           <a
             href={`tel:${tel.replace(/\s+/g, "")}`}

@@ -8,6 +8,7 @@ import {
   ensureNettoAanbetalingCreditfactuur,
   stripAllHoldSalesFromOpenSalesCreditfacturen,
 } from "@/lib/netto-creditfactuur";
+import { ensureAanbetalingCommissieClawbacks } from "@/lib/aanbetaling-commissie-clawback";
 
 export const runtime = "nodejs";
 
@@ -53,6 +54,7 @@ export async function POST() {
 
     const sb = getSupabaseAdmin();
     await stripAllHoldSalesFromOpenSalesCreditfacturen(sb);
+    await ensureAanbetalingCommissieClawbacks(sb);
     const preview = await buildToekomstigeVerkoperCreditfacturen(sb);
     const targets = preview.regels.filter((r) => r.status === "nieuw");
 

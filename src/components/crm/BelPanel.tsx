@@ -56,6 +56,7 @@ import {
   type NlProvincie,
 } from "@/lib/postcode-provincie";
 import { leadStatusLabel } from "@/lib/labels";
+import { belUitkomstEventPayload } from "@/lib/bel-uitkomst-log";
 import { BellerNettoKaart } from "./BellerNettoKaart";
 import { FastDirectionButton } from "./FastDirectionButton";
 import { LeadAdresEditor } from "./LeadAdresEditor";
@@ -92,6 +93,7 @@ async function clientLogLeadEvent(
     soort: string;
     titel: string;
     detail?: string | null;
+    meta?: Record<string, unknown> | null;
   }
 ) {
   try {
@@ -883,12 +885,16 @@ export function BelPanel({
     bestSlotsError,
     bestSlotsMode,
     bestSlotsLimit,
+    bestSlotsHasLoaded,
+    loadBestSlots,
     loadMeerBestSlots,
   } = useBestSlots({
     lead: current,
     lockAdviseur,
     defaultAdviseurId,
     enabled: Boolean(current?.id),
+    // Geen auto Distance Matrix bij elke lead — alleen na “Laad opties”.
+    autoload: false,
   });
 
   useEffect(() => {
@@ -1118,9 +1124,10 @@ export function BelPanel({
       Object.assign(patch, stamped);
       await completeTerugbelAfspraak(current.id);
       onLeadUpdated(current.id, patch);
+      const opgeslagenStatus = gc?.patch.status ?? status;
       void clientLogLeadEvent(current.id, {
         soort: "status",
-        titel: `Status → ${leadStatusLabel[gc?.patch.status ?? status] || status}`,
+        titel: `Status → ${leadStatusLabel[opgeslagenStatus] || opgeslagenStatus}`,
         detail:
           status === "geen_contact"
             ? `Belpoging ${pogingen}/${maxPogingen}${
@@ -1128,6 +1135,19 @@ export function BelPanel({
               }${gc?.definitief ? " — definitief geen contact" : ""}`
             : null,
       });
+      void clientLogLeadEvent(
+        current.id,
+        belUitkomstEventPayload({
+          gekozenStatus: status,
+          opgeslagenStatus,
+          pogingen,
+          maxPogingen,
+          herplan,
+          definitief: Boolean(gc?.definitief),
+          bron: "bellen",
+        })
+      );
+      setTimelineTick((t) => t + 1);
       if (gc?.sendGeenContactMail && current.email?.trim()) {
         void fetch(`/api/leads/${current.id}/geen-contact-mail`, {
           method: "POST",
@@ -1220,6 +1240,20 @@ export function BelPanel({
       }
       onLeadUpdated(current.id, leadPatch);
       await completeTerugbelAfspraak(current.id);
+      void clientLogLeadEvent(
+        current.id,
+        belUitkomstEventPayload({
+          gekozenStatus: "afspraak",
+          opgeslagenStatus: "afspraak",
+          pogingen: belpogingenOf(current),
+          maxPogingen: maxBelpogingenVoor({
+            herplan: herplanAnnulering || prioHerplan,
+          }),
+          herplan: herplanAnnulering || prioHerplan,
+          bron: "bellen",
+          extraDetail: notities?.trim() || null,
+        })
+      );
       // Full reload op de achtergrond (joins); agenda heeft de afspraak al
       void onNeedReload?.();
       goNextLead(current.id);
@@ -1301,6 +1335,23 @@ export function BelPanel({
           : "Terugbelafspraak gepland",
         detail: `${note} · ${terugbelAt.replace("T", " ")}`,
       });
+      void clientLogLeadEvent(
+        current.id,
+        belUitkomstEventPayload({
+          gekozenStatus: current.status,
+          opgeslagenStatus: current.status,
+          pogingen: belpogingenOf(current),
+          maxPogingen: maxBelpogingenVoor({
+            herplan: isHerplanBelLead(current),
+          }),
+          herplan: isHerplanBelLead(current),
+          bron: "bellen",
+          titel: terugbelWarm
+            ? "warme terugbelafspraak"
+            : "terugbelafspraak",
+          extraDetail: `${note} · ${terugbelAt.replace("T", " ")}`,
+        })
+      );
       onNeedReload?.();
       goNextLead(current.id);
     } catch (err) {
@@ -2228,7 +2279,9 @@ export function BelPanel({
               Direct inplannen
             </p>
             <p className="text-xs text-muted">
-              {bestSlotsHelpText({ lockAdviseur, limit: bestSlotsLimit })}
+              {bestSlotsHasLoaded
+                ? bestSlotsHelpText({ lockAdviseur, limit: bestSlotsLimit })
+                : "Klik op Laad opties voor top-momenten met reistijd (alleen dan Maps-kosten)."}
             </p>
 
             <BestSlotsOptionsList
@@ -2242,6 +2295,8 @@ export function BelPanel({
               loadingMore={bestSlotsLoadingMore}
               onLoadMore={() => void loadMeerBestSlots()}
               lockAdviseur={lockAdviseur}
+              hasLoaded={bestSlotsHasLoaded}
+              onLoad={() => void loadBestSlots()}
             />
 
             <button

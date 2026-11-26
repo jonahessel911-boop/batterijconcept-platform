@@ -245,7 +245,6 @@ export function PurchasingPanel() {
   const [autoSwitched, setAutoSwitched] = useState(false);
 
   const load = useCallback(async () => {
-    setLoading(true);
     setError(null);
     try {
       const res = await fetch("/api/inkoop/orders");
@@ -949,6 +948,7 @@ export function PurchasingPanel() {
                 <div className="flex flex-wrap gap-2 text-sm">
                   <Link
                     href={`/projecten/${openOrder.id}?from=purchasing`}
+                    prefetch={false}
                     className="font-medium text-green-dark underline-offset-2 hover:underline"
                   >
                     Project

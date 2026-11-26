@@ -46,6 +46,7 @@ import {
   type ProjectStatusKey,
 } from "@/lib/project-status-config";
 import type { Factuur, Project } from "@/types/database";
+import { isWarmtepompOrder } from "@/lib/project-product";
 
 /** Warmtefonds: installatie-actie pas vanaf dit % betaald (gemarkeerd). */
 export const WF_INSTALLATIE_MIN_BETAALD_PCT = 95;
@@ -133,6 +134,7 @@ export function kanWfSchouwdagInplannen(
   _facturen: Factuur[] = []
 ): boolean {
   if (schouwdagInplannenNietMeerNodig(project)) return false;
+  if (isWarmtepompOrder(project)) return false;
   return isWarmtefondsGoedgekeurdVoorSchouw(project);
 }
 
@@ -1141,7 +1143,10 @@ export function resolveProjectVolgendeStap(
     });
   }
 
-  if (status === "installatie_ingepland" || status === "materiaal_besteld") {
+  if (
+    (status === "installatie_ingepland" || status === "materiaal_besteld") &&
+    !isWarmtepompOrder(project)
+  ) {
     const batterij = batterijPurchasingStatus(project.materiaal_checks);
     if (materiaalNogTeBestellen(project) || !batterij.besteld) {
       const due = project.installatie_at

@@ -20,6 +20,7 @@ import {
   resolveInkoopLeverancierStatus,
 } from "@/lib/inkoop-leverancier-betaling";
 import type { ProductInkoop } from "@/lib/inkoop";
+import { isWarmtepompOrder } from "@/lib/project-product";
 
 type Props = {
   project: Project;
@@ -288,6 +289,18 @@ export function ProjectInkoopSection({ project, onProjectUpdated }: Props) {
   }
 
   const pctLabel = `${cash.betaaldPct.toFixed(cash.betaaldPct % 1 === 0 ? 0 : 1)}%`;
+
+  const wpOrder = isWarmtepompOrder(
+    project,
+    regels.map((r) => ({
+      omschrijving: r.omschrijving,
+      sku: r.sku,
+      naam: r.omschrijving,
+      product_id: r.product_id,
+      producten: r.producten,
+    }))
+  );
+  if (!loading && wpOrder) return null;
 
   return (
     <section className="border border-line bg-white">

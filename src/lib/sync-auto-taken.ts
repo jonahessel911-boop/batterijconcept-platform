@@ -29,6 +29,7 @@ import { resolveSaleAdviseurId } from "@/lib/sale-adviseur";
 import { OPLEVERING_AFTER_SALE_TAK_AUTO_KEY } from "@/lib/project-taken";
 import { getDefaultBackofficeMedewerkerId } from "@/lib/admin-adviseur";
 import { parseAanbetalingAfspraak } from "@/lib/aanbetaling-afspraak";
+import { isWarmtepompOrder } from "@/lib/project-product";
 
 const SCHOUWDAG_INPLAN_KEY = "schouwweek:schouwdag_inplannen";
 const CREDITFACTUUR_KEY = "annulering:creditfactuur";
@@ -183,7 +184,7 @@ export async function syncAutoTakenVoorProject(
   const { data: projectRow } = await sb
     .from("projecten")
     .select(
-      "status, verantwoordelijke_id, materiaal_checks, betaalwijze, financiering_status, warmtefonds_afspraak_at, aanbetaling_te_innen_inc, schouw_jaar, schouw_week, schouw_at, installatie_at, installatie_voltooid_at, btw_terugvragen_aangevraagd_at, overstap_dynamische_leverancier_at, review_gevraagd_at, monteur_beoordeling_sterren, leads(status), offertes(financiering_voorbehoud, subtotaal_ex_btw, btw_bedrag, totaal_inc_btw, aanbetaling_modus, aanbetaling_bedrag_inc, aanbetaling_te_innen_inc)"
+      "status, verantwoordelijke_id, materiaal_checks, betaalwijze, financiering_status, warmtefonds_afspraak_at, aanbetaling_te_innen_inc, schouw_jaar, schouw_week, schouw_at, installatie_at, installatie_voltooid_at, btw_terugvragen_aangevraagd_at, overstap_dynamische_leverancier_at, review_gevraagd_at, monteur_beoordeling_sterren, titel, leads(status), offertes(financiering_voorbehoud, subtotaal_ex_btw, btw_bedrag, totaal_inc_btw, aanbetaling_modus, aanbetaling_bedrag_inc, aanbetaling_te_innen_inc, offerte_regels(omschrijving, product_id, producten(sku, naam)))"
     )
     .eq("id", projectId)
     .maybeSingle();
@@ -243,12 +244,14 @@ export async function syncAutoTakenVoorProject(
           f.status === "betaald"
       );
     }
+    const warmtepomp = isWarmtepompOrder(project as Project);
     for (const d of autoTakenVoorStatus(operational, betaalwijze, {
       schouwAt: project.schouw_at,
       installatieAt: project.installatie_at,
       installatieVoltooidAt: project.installatie_voltooid_at,
       aanbetalingBetaald,
       geenAanbetalingNodig,
+      warmtepomp,
     })) {
       defs.push({ ...d });
     }
@@ -308,6 +311,7 @@ export async function syncAutoTakenVoorProject(
     // EM: schouwdag zit in kickoff-taken, geen aparte week-reminder.
     if (
       betaalwijze === "warmtefonds" &&
+      !warmtepomp &&
       !isSchouwdagDefinitief(project) &&
       kanWfSchouwdagInplannen(project as Project)
     ) {

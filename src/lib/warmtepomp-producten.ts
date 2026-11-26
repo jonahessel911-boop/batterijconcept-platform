@@ -64,6 +64,46 @@ export function warmtepompSku(adviseurId: string, code: string): string {
   return `WP:${adviseurId}:${code}`;
 }
 
+/** Cataloguscode uit WP:{adviseurId}:{code} of kale TC-GT…-code. */
+export function warmtepompCodeFromSku(
+  sku: string | null | undefined
+): string | null {
+  const s = (sku || "").trim();
+  if (!s) return null;
+  if (s.startsWith("WP:")) {
+    const code = s.split(":").slice(2).join(":").trim();
+    return code || null;
+  }
+  const m = s.match(/TC-GT\d{2}-[A-Z]+/i);
+  return m ? m[0].toUpperCase() : null;
+}
+
+export function warmtepompCatalogusItem(
+  product: { sku?: string | null; naam?: string | null } | null | undefined
+): WarmtepompCatalogusItem | null {
+  if (!product) return null;
+  const code = warmtepompCodeFromSku(product.sku);
+  if (code) {
+    const byCode = WARMTEPOMP_CATALOGUS.find((i) => i.code === code);
+    if (byCode) return byCode;
+  }
+  const naam = (product.naam || "").trim().toLowerCase();
+  if (!naam) return null;
+  return (
+    WARMTEPOMP_CATALOGUS.find((i) => i.naam.toLowerCase() === naam) ||
+    WARMTEPOMP_CATALOGUS.find((i) => naam.includes(i.naam.toLowerCase())) ||
+    null
+  );
+}
+
+/** Echte inkoop excl. btw uit de TC Swiss-catalogus. */
+export function warmtepompInkoopExcl(
+  product: { sku?: string | null; naam?: string | null } | null | undefined
+): number | null {
+  const item = warmtepompCatalogusItem(product);
+  return item ? item.inkoopExcl : null;
+}
+
 export function warmtepompSkusVoorAdviseur(adviseurId: string): string[] {
   return WARMTEPOMP_CATALOGUS.map((item) => warmtepompSku(adviseurId, item.code));
 }

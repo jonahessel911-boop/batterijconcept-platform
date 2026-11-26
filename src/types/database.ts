@@ -131,6 +131,7 @@ export type CrmTab =
   | "instroom"
   | "projecten"
   | "facturen"
+  | "uitbetalingen"
   | "creditfacturen"
   | "inkomend"
   | "inbox"
@@ -977,7 +978,12 @@ export interface Project {
     | "track_last_seen_at"
     | "track_view_count"
   > & {
-    offerte_regels?: { omschrijving?: string | null; aantal?: number | null }[];
+    offerte_regels?: {
+      omschrijving?: string | null;
+      aantal?: number | null;
+      product_id?: string | null;
+      producten?: { sku?: string | null; naam?: string | null } | null;
+    }[];
   } | null;
 }
 

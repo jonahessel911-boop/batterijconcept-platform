@@ -81,7 +81,19 @@ export function CallPopupHost({
           return;
         }
         const data = (await res.json()) as { popups?: CallPopupRow[] };
-        setQueue(data.popups || []);
+        const next = data.popups || [];
+        setQueue((prev) => {
+          if (prev.length === 0 && next.length === 0) return prev;
+          if (
+            prev.length === next.length &&
+            prev.every(
+              (p, i) => p.id === next[i]?.id && p.phase === next[i]?.phase
+            )
+          ) {
+            return prev;
+          }
+          return next;
+        });
       } catch {
         /* stil */
       }

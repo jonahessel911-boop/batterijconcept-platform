@@ -47,6 +47,13 @@ import {
 import { formatInTimeZone } from "date-fns-tz";
 import { isToday, isYesterday, parseISO } from "date-fns";
 import { nl } from "date-fns/locale";
+import {
+  PROJECT_PRODUCT_LABEL,
+  projectProductSoort,
+  type ProjectProductSoort,
+} from "@/lib/project-product";
+import { getSupabaseBrowser } from "@/lib/supabase";
+import { fetchAllRows } from "@/lib/supabase-fetch-all";
 import { ProjectStatusSelect } from "./ProjectStatusSelect";
 import { rememberCrmReturnUrl } from "./DetailChrome";
 import { KlantContactMailModal } from "./KlantContactMailModal";
@@ -59,6 +66,7 @@ type ProjectenFiltersStored = {
   actief?: ActiefFilter;
   statusFilter?: ProjectStatus | "";
   financieringFilter?: "" | "em" | "wf";
+  productFilter?: "" | ProjectProductSoort;
   filterActie?: boolean;
   filterWachtExtern?: boolean;
   medewerkerId?: string;
@@ -234,6 +242,10 @@ function projectZoekScore(p: Project, needle: string): number {
     p.leads?.toevoeging,
     p.leads?.straat,
     p.leads?.plaats,
+    (() => {
+      const soort = projectProductSoort(p);
+      return soort ? PROJECT_PRODUCT_LABEL[soort] : "";
+    })(),
     keys.compact,
     keys.compactMetToev,
     p.installatie_partners?.naam,
@@ -368,6 +380,14 @@ function installatieLabel(p: Project): string {
   return formatDateShort(p.installatie_at);
 }
 
+function productCelLabel(
+  p: Project,
+  extraRegels?: Parameters<typeof projectProductSoort>[1]
+): string {
+  const soort = projectProductSoort(p, extraRegels);
+  return soort ? PROJECT_PRODUCT_LABEL[soort] : "—";
+}
+
 function DatumMetVink({
   label,
   done,
@@ -414,6 +434,12 @@ export function BackofficeTable({
   const [financieringFilter, setFinancieringFilter] = useState<
     "" | "em" | "wf"
   >("");
+  const [productFilter, setProductFilter] = useState<"" | ProjectProductSoort>(
+    ""
+  );
+  const [regelsByOfferte, setRegelsByOfferte] = useState<
+    Record<string, { omschrijving?: string | null; sku?: string | null; naam?: string | null }[]>
+  >({});
   /** Standaard Actie aan — wachten-op-extern uitfilteren. */
   const [filterActie, setFilterActie] = useState(true);
   const [filterWachtExtern, setFilterWachtExtern] = useState(false);
@@ -440,6 +466,9 @@ export function BackofficeTable({
     if (s.financieringFilter === "em" || s.financieringFilter === "wf") {
       setFinancieringFilter(s.financieringFilter);
     }
+    if (s.productFilter === "warmtepomp" || s.productFilter === "thuisbatterij") {
+      setProductFilter(s.productFilter);
+    }
     if (typeof s.filterActie === "boolean") setFilterActie(s.filterActie);
     if (typeof s.filterWachtExtern === "boolean") {
       setFilterWachtExtern(s.filterWachtExtern);
@@ -464,6 +493,7 @@ export function BackofficeTable({
       actief,
       statusFilter,
       financieringFilter,
+      productFilter,
       filterActie,
       filterWachtExtern,
       medewerkerId,
@@ -476,6 +506,7 @@ export function BackofficeTable({
     actief,
     statusFilter,
     financieringFilter,
+    productFilter,
     filterActie,
     filterWachtExtern,
     medewerkerId,
@@ -497,6 +528,72 @@ export function BackofficeTable({
     const frame = requestAnimationFrame(() => void loadTaken());
     return () => cancelAnimationFrame(frame);
   }, [loadTaken]);
+
+  const offerteIdsKey = useMemo(
+    () =>
+      [
+        ...new Set(
+          projecten
+            .map((p) => p.offerte_id)
+            .filter((id): id is string => Boolean(id))
+        ),
+      ]
+        .sort()
+        .join(","),
+    [projecten]
+  );
+
+  useEffect(() => {
+    const ids = offerteIdsKey ? offerteIdsKey.split(",") : [];
+    if (ids.length === 0) return;
+    let cancelled = false;
+    const sb = getSupabaseBrowser();
+    void (async () => {
+      try {
+        const map: Record<
+          string,
+          {
+            omschrijving?: string | null;
+            sku?: string | null;
+            naam?: string | null;
+          }[]
+        > = {};
+        const chunkSize = 80;
+        for (let i = 0; i < ids.length; i += chunkSize) {
+          const slice = ids.slice(i, i + chunkSize);
+          const rows = await fetchAllRows<{
+            offerte_id: string;
+            omschrijving: string | null;
+            producten: { sku: string | null; naam: string | null } | null;
+          }>((from, to) =>
+            sb
+              .from("offerte_regels")
+              .select("offerte_id, omschrijving, producten(sku, naam)")
+              .in("offerte_id", slice)
+              .order("id", { ascending: true })
+              .range(from, to)
+          );
+          for (const r of rows) {
+            const prod = Array.isArray(r.producten)
+              ? r.producten[0]
+              : r.producten;
+            (map[r.offerte_id] ||= []).push({
+              omschrijving: r.omschrijving,
+              sku: prod?.sku,
+              naam: prod?.naam,
+            });
+          }
+        }
+        if (cancelled) return;
+        setRegelsByOfferte(map);
+      } catch {
+        /* nested bootstrap-data is genoeg als fallback */
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [offerteIdsKey]);
 
   const { projectIdsWithActie, projectIdsActie, projectIdsWachtExtern } =
     useMemo(() => {
@@ -600,6 +697,14 @@ export function BackofficeTable({
         return false;
       }
 
+      if (productFilter) {
+        const soort = projectProductSoort(
+          p,
+          p.offerte_id ? regelsByOfferte[p.offerte_id] : null
+        );
+        if (soort !== productFilter) return false;
+      }
+
       if (medewerkerId) {
         if (
           p.verantwoordelijke_id !== medewerkerId &&
@@ -673,6 +778,8 @@ export function BackofficeTable({
     actief,
     statusFilter,
     financieringFilter,
+    productFilter,
+    regelsByOfferte,
     medewerkerId,
     datumFilter,
     sortDir,
@@ -718,6 +825,7 @@ export function BackofficeTable({
     actief,
     statusFilter,
     financieringFilter,
+    productFilter,
     filterActie,
     filterWachtExtern,
     medewerkerId,
@@ -835,7 +943,7 @@ export function BackofficeTable({
       </div>
 
       <div className="flex flex-wrap items-center gap-2">
-        <label className="relative min-w-[14rem] flex-1">
+        <label className="relative w-full min-w-[14rem] sm:w-auto sm:max-w-sm sm:flex-1">
           <span className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-muted">
             ⌕
           </span>
@@ -860,6 +968,19 @@ export function BackofficeTable({
           <option value="hold_sales">HOLD sales</option>
           <option value="annuleringen">Annuleringen</option>
           <option value="alles">Alles</option>
+        </select>
+
+        <select
+          value={productFilter}
+          onChange={(e) =>
+            setProductFilter(e.target.value as "" | ProjectProductSoort)
+          }
+          className={filterBtn}
+          aria-label="Filter product"
+        >
+          <option value="">Product</option>
+          <option value="thuisbatterij">Thuisbatterij</option>
+          <option value="warmtepomp">Warmtepomp</option>
         </select>
 
         <select
@@ -1001,6 +1122,13 @@ export function BackofficeTable({
                   </div>
                   <p className="text-xs text-muted">
                     {p.leads?.naam || "—"} · {datumbereik(p)}
+                    {" · "}
+                    <span className="font-mono text-xs text-muted">
+                      {productCelLabel(
+                        p,
+                        p.offerte_id ? regelsByOfferte[p.offerte_id] : null
+                      )}
+                    </span>
                   </p>
                   <p className="text-xs text-muted">
                     Schouw {schouwweekLabel(p)}
@@ -1055,7 +1183,7 @@ export function BackofficeTable({
 
           {/* Desktop */}
           <div className="hidden overflow-x-auto md:block">
-            <table className="w-full min-w-[72rem] border-collapse text-left text-sm">
+            <table className="w-full min-w-[80rem] border-collapse text-left text-sm">
               <thead>
                 <tr className="border-b border-line bg-wash/80 text-[11px] font-semibold uppercase tracking-wide text-muted">
                   <th className="px-4 py-3 font-semibold normal-case tracking-normal text-ink">
@@ -1063,6 +1191,9 @@ export function BackofficeTable({
                   </th>
                   <th className="px-3 py-3 font-semibold normal-case tracking-normal text-ink">
                     Nummer
+                  </th>
+                  <th className="px-3 py-3 font-semibold normal-case tracking-normal text-ink">
+                    Product
                   </th>
                   <th className="px-3 py-3 font-semibold normal-case tracking-normal text-ink">
                     Status
@@ -1115,6 +1246,7 @@ export function BackofficeTable({
                       <td className="max-w-[16rem] px-4 py-3">
                         <Link
                           href={projectHref(p.id)}
+                          prefetch={false}
                           className="block min-w-0"
                           onClick={(e) => e.stopPropagation()}
                         >
@@ -1129,6 +1261,12 @@ export function BackofficeTable({
                       </td>
                       <td className="whitespace-nowrap px-3 py-3 font-mono text-xs text-muted">
                         {p.project_nummer || "—"}
+                      </td>
+                      <td className="whitespace-nowrap px-3 py-3 font-mono text-xs text-muted">
+                        {productCelLabel(
+                          p,
+                          p.offerte_id ? regelsByOfferte[p.offerte_id] : null
+                        )}
                       </td>
                       <td
                         className="px-3 py-3"

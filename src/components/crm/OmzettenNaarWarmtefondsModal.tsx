@@ -24,6 +24,7 @@ export function OmzettenNaarWarmtefondsModal({
   leadId,
   offerte,
   hasVerstuurdeAanbetaling,
+  warmtepomp = false,
   onDone,
 }: {
   open: boolean;
@@ -33,6 +34,7 @@ export function OmzettenNaarWarmtefondsModal({
   offerte: OfferteLike | null | undefined;
   /** Concept blijft bijwerken; verzonden/betaald blijft staan. */
   hasVerstuurdeAanbetaling?: boolean;
+  warmtepomp?: boolean;
   onDone: () => void | Promise<void>;
 }) {
   /** Altijd BTW als default bij omzetting naar WF */
@@ -53,6 +55,7 @@ export function OmzettenNaarWarmtefondsModal({
     modus,
     handmatigIncBtw: parseEuroInput(handmatig),
     financieringVoorbehoud: true,
+    warmtepomp,
   });
 
   async function bevestig() {
@@ -182,6 +185,7 @@ export function OmzettenNaarWarmtefondsModal({
             btwBedrag={btwBedrag}
             totaalIncBtw={totaalIncBtw}
             financieringVoorbehoud
+            warmtepomp={warmtepomp}
           />
 
           <p className="text-[12px] text-muted">

@@ -363,11 +363,26 @@ export function TodayPanel() {
           <p className="px-1 text-[10px] font-semibold uppercase tracking-[0.1em] text-muted">
             Instroom
           </p>
-          <div className="grid gap-2 sm:grid-cols-2">
+          <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-4">
             <KpiTile label="Leads" value={num(data.leads)} />
             <KpiTile
-              label="Leads ingepland"
+              label="Bereikt"
+              value={num(data.leadsBereikt)}
+              hint={`${num(data.leadsGeenInteresse)} geen int. · ${num(data.leadsIngepland)} ingepland`}
+            />
+            <KpiTile
+              label="Ingepland"
               value={num(data.leadsIngepland)}
+            />
+            <KpiTile
+              label="Conversie bereikt"
+              value={
+                data.conversieBereiktPct == null
+                  ? "—"
+                  : `${num(data.conversieBereiktPct, 1)}%`
+              }
+              hint="ingepland / gesproken"
+              accent="green"
             />
           </div>
         </div>

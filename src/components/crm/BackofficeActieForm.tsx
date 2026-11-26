@@ -27,6 +27,7 @@ type Props = {
   btwBedrag: number;
   totaalIncBtw: number;
   financieringVoorbehoud: boolean;
+  warmtepomp?: boolean;
   adviseurNaam?: string | null;
   sessionNaam?: string | null;
   values: BackofficeActieFormValues;
@@ -41,6 +42,7 @@ export function BackofficeActieForm({
   btwBedrag,
   totaalIncBtw,
   financieringVoorbehoud,
+  warmtepomp = false,
   adviseurNaam,
   sessionNaam,
   values,
@@ -95,6 +97,7 @@ export function BackofficeActieForm({
           btwBedrag={btwBedrag}
           totaalIncBtw={totaalIncBtw}
           financieringVoorbehoud={financieringVoorbehoud}
+          warmtepomp={warmtepomp}
         />
 
         <div className="rounded-xl border border-[#0a4727]/20 bg-[#F7F9F7] px-3 py-3 sm:px-4">

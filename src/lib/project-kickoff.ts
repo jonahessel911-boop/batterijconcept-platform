@@ -1,9 +1,10 @@
 /**
  * Kickoff na getekende order.
  *
- * Warmtefonds: BTW-factuur + WF-afspraak + schouwweek parallel (incl. track & trace-mail)
- * Eigen middelen: sequentieel — eerste factuur leidend; schouwdag pas ná
+ * Warmtefonds (thuisbatterij): BTW-factuur + WF-afspraak + schouwweek parallel
+ * Eigen middelen (thuisbatterij): sequentieel — eerste factuur leidend; schouwdag pas ná
  * markering betaald. Installatie volgt ná schouw.
+ * Warmtepomp: alleen factuur + doorsturen naar TC Swiss (geen schouwweek).
  *
  * Track & trace is géén aparte taak — zit in de schouw-klantmail.
  */
@@ -26,6 +27,10 @@ import {
   isSchouwdagDefinitief,
 } from "@/lib/schouw-week";
 import { parseTcSwissIntakeStored } from "@/lib/tcswiss-intake";
+import {
+  isWarmtepompOrder,
+  warmtepompProductNaamVanProject,
+} from "@/lib/project-product";
 import {
   aanbetalingAfspraakLabel,
   parseAanbetalingAfspraak,
@@ -166,6 +171,7 @@ export function isSchouwweekKickoffActionable(
   project: Project,
   facturen: Factuur[] = []
 ): boolean {
+  if (isWarmtepompOrder(project)) return false;
   if (isSchouwweekKickoffDone(project)) return false;
   if (isWarmtefondsProject(project)) return true;
   if (projectHeeftGeenAanbetalingNodig(project)) return true;
@@ -193,26 +199,43 @@ export function projectKickoffItems(
   const schouwDone = isSchouwweekKickoffDone(project);
   const wfDone = isWfAfspraakKickoffDone(project);
   const schouwBlocked = !wf && !schouwDone && !aanbetalingBetaald;
+  const tcswissStored = parseTcSwissIntakeStored(project.materiaal_checks);
+  const wp =
+    Boolean(extra?.warmtepomp) ||
+    Boolean(tcswissStored) ||
+    isWarmtepompOrder(project);
+  const tcswissSent = extra?.tcswissSent ?? Boolean(tcswissStored);
+  const wpNaam = warmtepompProductNaamVanProject(project);
 
   const items: KickoffItem[] = [];
 
   // Handmatig €0 → geen factuur-stap in opstarten
+  // Warmtepomp: factuur (obv offerte) + TC Swiss. Geen WF-portaal/schouw/Purchasing.
   if (!geenAanbetaling) {
     items.push({
       id: "aanbetaling",
-      label: wf ? "BTW-factuur" : "50% aanbetaling",
+      label: wp
+        ? "Factuur versturen"
+        : wf
+          ? "BTW-factuur"
+          : "50% aanbetaling",
       done: aanbetalingDone,
       detail: aanbetalingDone
         ? betaalAfspraak
           ? aanbetalingAfspraakLabel(betaalAfspraak)
           : "Taak afgevinkt"
-        : wf
-          ? "Verstuur de factuur, of leg vast hoe de klant later betaalt"
-          : "Verstuur de 50%-factuur, of leg een betaalafspraak vast",
+        : wp
+          ? wf
+            ? "Verstuur de factuur zoals op de offerte (BTW / aanbetaling)"
+            : "Verstuur de factuur zoals op de offerte (50% / aanbetaling)"
+          : wf
+            ? "Verstuur de factuur"
+            : "Verstuur de 50%-factuur",
     });
   }
 
-  if (wf) {
+  // Warmtepomp: geen WF-portaal/schouwweek/Purchasing.
+  if (wf && !wp) {
     items.push({
       id: "wf_afspraak",
       label: "WF-portaal",
@@ -223,35 +246,31 @@ export function projectKickoffItems(
     });
   }
 
-  items.push({
-    id: "schouwweek",
-    label: wf ? "Schouwweek" : "Schouwdag",
-    done: schouwDone,
-    blocked: schouwBlocked || undefined,
-    blockedReason: schouwBlocked
-      ? "Eerst eerste factuur als betaald markeren"
-      : undefined,
-    detail: schouwDone
-      ? formatProjectSchouwWeek(project) || "Taak afgevinkt"
-      : schouwBlocked
+  if (!wp) {
+    items.push({
+      id: "schouwweek",
+      label: wf ? "Schouwweek" : "Schouwdag",
+      done: schouwDone,
+      blocked: schouwBlocked || undefined,
+      blockedReason: schouwBlocked
         ? "Eerst eerste factuur als betaald markeren"
-        : "Check als dit is gezet",
-  });
+        : undefined,
+      detail: schouwDone
+        ? formatProjectSchouwWeek(project) || "Taak afgevinkt"
+        : schouwBlocked
+          ? "Eerst eerste factuur als betaald markeren"
+          : "Check als dit is gezet",
+    });
+  }
 
-  const tcswissStored = parseTcSwissIntakeStored(project.materiaal_checks);
-  const wp = Boolean(extra?.warmtepomp) || Boolean(tcswissStored);
-  const tcswissSent =
-    extra?.tcswissSent ?? Boolean(tcswissStored);
   if (wp) {
     items.push({
       id: "tcswiss",
-      label: "TC Swiss",
+      label: "Stuur naar TC Swiss",
       done: tcswissSent,
       detail: tcswissSent
-        ? tcswissStored?.lead
-          ? `Ingeschoten · ${tcswissStored.lead}`
-          : "Ingeschoten bij TC Swiss"
-        : "Stuur de warmtepomp-order naar TC Swiss",
+        ? `Doorgestuurd naar TC Swiss - ${wpNaam}`
+        : `Stuur naar TC Swiss - ${wpNaam}`,
     });
   }
 
@@ -304,6 +323,7 @@ export function kickoffWarmtefondsBedragen(
       modus: off.aanbetaling_modus,
       handmatigIncBtw: off.aanbetaling_bedrag_inc,
       financieringVoorbehoud: warmtefonds,
+      warmtepomp: isWarmtepompOrder(project),
     });
     return {
       aanbetalingInc:
@@ -311,7 +331,7 @@ export function kickoffWarmtefondsBedragen(
         project.aanbetaling_te_innen_inc ??
         off.aanbetaling_te_innen_inc ??
         a.bedragIncBtw,
-      /** Warmtefonds-aanvraag: max € 8.500 */
+      /** Warmtefonds-aanvraag: batterij max € 8.500, warmtepomp heel restant */
       warmtefondsInc: warmtefonds ? a.warmtefondsIncBtw : null,
     };
   }

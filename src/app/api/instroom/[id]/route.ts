@@ -3,11 +3,7 @@ import { getSupabaseAdmin } from "@/lib/supabase";
 import { errMessage } from "@/lib/errors";
 import { appendStampedNotitie } from "@/lib/lead-notitie";
 import { sendEmail } from "@/lib/email/postmark";
-import { INFO_REPLY_TO } from "@/lib/email/adviseur-reply-to";
-import {
-  sollicitatieGesprekDiskwalificatieEmail,
-  sollicitatieTrainingBevestigingEmail,
-} from "@/lib/email/templates";
+import { sollicitatieTrainingBevestigingEmail } from "@/lib/email/templates";
 import {
   parseSollicitatieStatus,
   SOLLICITATIE_STATUS_MET_TRAINING,
@@ -24,9 +20,6 @@ import {
 import { resolveSollicitatieAdres } from "@/lib/sollicitatie-adres";
 import type { SollicitatieStatus } from "@/types/database";
 import { requireRecruitmentSession } from "@/lib/auth-require-recruitment";
-
-const STATUS_GESPREK_DISKWALIFICATIE: SollicitatieStatus =
-  "gesprek_gehad_diskwalificatie";
 
 export const runtime = "nodejs";
 
@@ -415,74 +408,7 @@ export async function PATCH(
     let mailError: string | null = null;
     let sollicitatieOut = data;
 
-    const enteringGesprekDiskwalificatie =
-      patch.status === STATUS_GESPREK_DISKWALIFICATIE &&
-      parseSollicitatieStatus(current?.status) !==
-        STATUS_GESPREK_DISKWALIFICATIE;
-
-    if (enteringGesprekDiskwalificatie && data) {
-      const to = (data.email as string | null)?.trim() || null;
-      const naam = (data.naam as string) || "kandidaat";
-      if (!to) {
-        mailSkipped = true;
-      } else {
-        try {
-          const subject =
-            "Update over je sollicitatie — BatterijConcept";
-          const html = sollicitatieGesprekDiskwalificatieEmail({ naam });
-          const tag = "sollicitatie-gesprek-diskwalificatie";
-          const sent = await sendEmail({
-            to,
-            subject,
-            html,
-            tag,
-            replyTo: INFO_REPLY_TO,
-          });
-          if (sent.ok) {
-            mailSent = true;
-            const fromEmail =
-              process.env.POSTMARK_FROM_EMAIL || "info@batterijconcept.nl";
-            try {
-              await sb.from("inbox_mails").insert({
-                folder: "verzonden",
-                status: "afgehandeld",
-                direction: "outbound",
-                message_id: sent.messageId || null,
-                thread_id: sent.messageId || `sol-disk-${id}`,
-                from_name: "BatterijConcept Recruitment",
-                from_email: fromEmail,
-                to_email: to,
-                subject,
-                body_text:
-                  "Helaas bent u het niet geworden. We wensen u nog veel succes in de toekomst.",
-                body_html: html,
-                received_at: new Date().toISOString(),
-                suggested_actions: [],
-                raw_headers: { postmark_tag: tag },
-              });
-            } catch (err) {
-              console.error("diskwalificatie inbox_mails insert:", err);
-            }
-            const note = appendStampedNotitie(
-              (sollicitatieOut?.notitie as string | null) ||
-                (current?.notitie as string | null),
-              `Afwijzingsmail verstuurd → ${to}`
-            );
-            const { data: withNote, error: noteErr } = await sb
-              .from("sollicitaties")
-              .update({ notitie: note })
-              .eq("id", id)
-              .select("*")
-              .single();
-            if (!noteErr && withNote) sollicitatieOut = withNote;
-          } else {
-            mailError = sent.error || "Mail versturen mislukt";
-          }
-        } catch (e) {
-          mailError = errMessage(e, "Mail versturen mislukt");
-        }
-      }
-    }
+    // Diskwalificatie (ook na gesprek): geen automatische mail naar kandidaat.
 
     const enteringTraining =
       patch.status === SOLLICITATIE_STATUS_MET_TRAINING &&

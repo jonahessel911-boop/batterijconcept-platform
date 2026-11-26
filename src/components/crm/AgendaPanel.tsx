@@ -65,6 +65,7 @@ import {
   normalizeAanbetalingModus,
   parseEuroInput,
 } from "@/lib/aanbetaling";
+import { productSoortVanRegels } from "@/lib/project-product";
 import {
   agendaWeekJumpOptions,
   parseSchouwWeekValue,
@@ -671,6 +672,7 @@ export function AfspraakDetail({
     leadStatusProp || afspraak.leads?.status || null
   );
   const [alDoorgezetBo, setAlDoorgezetBo] = useState(false);
+  const [offerteGetekend, setOfferteGetekend] = useState(false);
   const [sessionNaam, setSessionNaam] = useState<string | null>(null);
   const [sessionAdviseurId, setSessionAdviseurId] = useState<string | null>(
     null
@@ -726,14 +728,16 @@ export function AfspraakDetail({
   // Al via Offertes doorgezet → geen agenda-afboek meer (voorkomt sale→vervolg).
   const needsAction = needsActionRaw && !alDoorgezetBo;
   const dealNogAfboeken =
-    leadStatusNow === "deal" && needsActionRaw && !alDoorgezetBo;
+    (leadStatusNow === "deal" || offerteGetekend) &&
+    needsActionRaw &&
+    !alDoorgezetBo;
   const actionBadgeLabel = dealNogAfboeken
     ? "Uitkomst nodig"
     : "Vervolg punt nodig";
   const isTelefonischAfspraak =
     afspraakTypeLabel(current.soort, current.leads?.status) === "Tel";
   const actionIntro = dealNogAfboeken
-    ? "Offerte is getekend (deal). Kies sale met financiering of eigen middelen om de afspraak af te boeken."
+    ? "Offerte is getekend. Kies sale met financiering of eigen middelen."
     : isSaleUitkomst(uitkomst)
       ? "Sale geselecteerd — vul hieronder de backoffice in en rond de actie af."
       : isTelefonischAfspraak
@@ -778,6 +782,7 @@ export function AfspraakDetail({
     setSaleOfferte(null);
     setFreshLeadStatus(leadStatusProp || afspraak.leads?.status || null);
     setAlDoorgezetBo(false);
+    setOfferteGetekend(false);
     setWfProjectId(null);
     setWfAangevraagdAt(null);
     setEditingNotitie(false);
@@ -937,6 +942,8 @@ export function AfspraakDetail({
         if (cancelled) return;
         const st = (lead?.status as string | null) || null;
         setFreshLeadStatus(st);
+        const getekend = (offs || []).length > 0;
+        setOfferteGetekend(getekend);
         const saleSt =
           st === "sale_financiering" || st === "sale_eigen_middelen";
         const offerteDoor =
@@ -953,6 +960,11 @@ export function AfspraakDetail({
       cancelled = true;
     };
   }, [current.lead_id, current.id]);
+
+  useEffect(() => {
+    if (!offerteGetekend) return;
+    if (uitkomst && !isSaleUitkomst(uitkomst)) setUitkomst("");
+  }, [offerteGetekend, uitkomst]);
 
   useEffect(() => {
     if (!isSaleUitkomst(uitkomst) || !current.lead_id) {
@@ -1623,6 +1635,8 @@ export function AfspraakDetail({
           modus: saveModus,
           handmatigIncBtw: parseEuroInput(boValues.aanbetalingHandmatig),
           financieringVoorbehoud: warmtefonds,
+          warmtepomp:
+            productSoortVanRegels(saleOfferte.offerte_regels) === "warmtepomp",
         });
         const res = await fetch(`/api/offertes/${saleOfferte.id}`, {
           method: "PATCH",
@@ -2126,7 +2140,7 @@ export function AfspraakDetail({
                     <option value="">Kies uitkomst…</option>
                     {(dealNogAfboeken
                       ? AFSPRAAK_UITKOMSTEN.filter((s) => isSaleUitkomst(s))
-                      : AFSPRAAK_UITKOMSTEN.filter((s) => !isSaleUitkomst(s))
+                      : AFSPRAAK_UITKOMSTEN
                     ).map((s) => (
                       <option key={s} value={s}>
                         {leadStatusLabel[s]}
@@ -2170,6 +2184,10 @@ export function AfspraakDetail({
                           totaalIncBtw={Number(saleOfferte.totaal_inc_btw) || 0}
                           financieringVoorbehoud={
                             uitkomst === "sale_financiering"
+                          }
+                          warmtepomp={
+                            productSoortVanRegels(saleOfferte.offerte_regels) ===
+                            "warmtepomp"
                           }
                           adviseurNaam={(() => {
                             const l = Array.isArray(saleOfferte.leads)

@@ -51,6 +51,8 @@ type KickoffDueContext = DueContext & {
   aanbetalingBetaald?: boolean;
   /** Handmatig €0 → geen aanbetalingsfactuur/taak. */
   geenAanbetalingNodig?: boolean;
+  /** Warmtepomp: geen schouwweek, wel TC Swiss. */
+  warmtepomp?: boolean;
 };
 
 /** Auto-taken bij status Opstarten. WF parallel; EM gestaffeld. */
@@ -59,9 +61,27 @@ function kickoffAutoTaken(
   opts: {
     aanbetalingBetaald?: boolean;
     geenAanbetalingNodig?: boolean;
+    warmtepomp?: boolean;
   } = {}
 ): AutoTaakDef[] {
   const taken: AutoTaakDef[] = [];
+  if (opts.warmtepomp) {
+    if (!opts.geenAanbetalingNodig) {
+      taken.push({
+        autoKey: "kickoff:aanbetaling",
+        titel: "Factuur versturen",
+        afdeling: "Facturatie",
+        dueInDays: 1,
+      });
+    }
+    taken.push({
+      autoKey: "kickoff:tcswiss",
+      titel: "Stuur naar TC Swiss",
+      afdeling: "Backoffice",
+      dueInDays: 1,
+    });
+    return taken;
+  }
   if (!opts.geenAanbetalingNodig) {
     taken.push({
       autoKey: "kickoff:aanbetaling",
@@ -108,6 +128,7 @@ export function autoTakenVoorStatus(
     return kickoffAutoTaken(betaalwijze === "warmtefonds", {
       aanbetalingBetaald: ctx.aanbetalingBetaald,
       geenAanbetalingNodig: ctx.geenAanbetalingNodig,
+      warmtepomp: ctx.warmtepomp,
     });
   }
 

@@ -17,6 +17,7 @@ import {
   factuurOmschrijvingMetProduct,
   primaireProductOmschrijving,
 } from "@/lib/factuur-omschrijving";
+import { productSoortVanRegels } from "@/lib/project-product";
 import { formatEuro } from "@/lib/format";
 import {
   COMPANY_IBAN_DISPLAY,
@@ -35,6 +36,30 @@ async function productLabelVoorOfferte(
     .eq("offerte_id", offerteId)
     .order("sort_order", { ascending: true });
   return primaireProductOmschrijving(data || []);
+}
+
+async function offerteIsWarmtepomp(
+  sb: SupabaseClient,
+  offerteId: string
+): Promise<boolean> {
+  const { data } = await sb
+    .from("offerte_regels")
+    .select("omschrijving, producten(sku, naam)")
+    .eq("offerte_id", offerteId);
+  const regels = (data || []).map((r) => {
+    const producten = (
+      r as {
+        producten?: { sku?: string | null; naam?: string | null } | null;
+      }
+    ).producten;
+    return {
+      sku: (r as { sku?: string | null }).sku,
+      naam: (r as { naam?: string | null }).naam,
+      omschrijving: (r as { omschrijving?: string | null }).omschrijving,
+      producten: Array.isArray(producten) ? producten[0] : producten,
+    };
+  });
+  return productSoortVanRegels(regels) === "warmtepomp";
 }
 
 /** Verwijder openstaande concept-aanbetalingsfacturen (bijv. bij €0 aanbetaling). */
@@ -246,7 +271,8 @@ export async function ensureBtwDraftFactuur(
 
 /**
  * Concept-restantfactuur.
- * Warmtefonds: Warmtefonds-deel (max € 8.500, nooit meer dan order excl. btw).
+ * Warmtefonds + batterij: max € 8.500.
+ * Warmtefonds + warmtepomp: openstaand restant (geen plafond).
  * Anders: order incl. − reeds gefactureerd.
  */
 export async function ensureRestantDraftFactuur(
@@ -277,10 +303,12 @@ export async function ensureRestantDraftFactuur(
       isRestantFactuurOmschrijving(f.omschrijving) && f.status === "concept"
   );
 
+  const warmtepomp = await offerteIsWarmtepomp(sb, opts.offerteId);
   const bedragIncBtw = restantFactuurBedrag({
     orderIncBtw: opts.orderIncBtw,
     orderExBtw: opts.orderExBtw,
     warmtefonds: opts.warmtefonds,
+    warmtefondsPlafond: !warmtepomp,
     facturen,
     excludeRestant: Boolean(existingConcept),
   });

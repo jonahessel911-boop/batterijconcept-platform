@@ -64,7 +64,8 @@ import { VerstuurDatumOptieModal } from "./VerstuurDatumOptieModal";
 import { Breadcrumb, DetailShell, NotFoundState, TerugButton } from "./DetailChrome";
 import { StatusBadge } from "./StatusBadge";
 import {
-  isSchouwFormulier,
+  isOpleveringsrapportBewijs,
+  isSchouwFormulierBewijs,
   SCHOUW_FORMULIER_OMSCHRIJVING,
 } from "@/lib/project-documenten";
 import {
@@ -95,6 +96,7 @@ import {
   HOLD_SALES_VERLENG_DAGEN,
   stampHoldSalesTerugAfgehandeld,
 } from "@/lib/hold-sales";
+import { isWarmtepompOrder } from "@/lib/project-product";
 
 const ACTIEVE_AFSPRAAK = new Set(["gepland", "bevestigd", "verzet"]);
 
@@ -412,9 +414,11 @@ export function ProjectPage() {
   const id = Array.isArray(rawId) ? rawId[0] : rawId;
   const router = useRouter();
   const searchParams = useSearchParams();
-  const backView = parseBoView(searchParams.get("from"));
+  const fromParam = searchParams.get("from") || "";
+  const backView = parseBoView(fromParam);
   const backHref = backofficeHref(backView);
   const { session } = useCrmSession();
+  const projectRef = useRef<Project | null>(null);
 
   const [project, setProject] = useState<Project | null>(null);
   const [fotos, setFotos] = useState<ProjectFoto[]>([]);
@@ -501,7 +505,8 @@ export function ProjectPage() {
       setLoading(false);
       return;
     }
-    setLoading(true);
+    const alreadyLoaded = projectRef.current?.id === id;
+    if (!alreadyLoaded) setLoading(true);
     setNotFound(false);
     try {
       const res = await fetch(`/api/projecten/${id}`);
@@ -514,11 +519,11 @@ export function ProjectPage() {
       const loaded = (data as { project: Project; redirectTo?: string }).project;
       const redirectTo = (data as { redirectTo?: string }).redirectTo;
       if (redirectTo && redirectTo !== id) {
-        const from = searchParams.get("from");
-        const q = from ? `?from=${encodeURIComponent(from)}` : "";
+        const q = fromParam ? `?from=${encodeURIComponent(fromParam)}` : "";
         router.replace(`/projecten/${redirectTo}${q}`);
         return;
       }
+      projectRef.current = loaded;
       setProject(loaded);
       const projectId = loaded.id;
       const resolvedLeadId = loaded.lead_id || null;
@@ -608,7 +613,7 @@ export function ProjectPage() {
     } finally {
       setLoading(false);
     }
-  }, [id, router, searchParams]);
+  }, [id, fromParam, router]);
 
   useEffect(() => {
     const frame = requestAnimationFrame(() => void load());
@@ -2256,10 +2261,25 @@ export function ProjectPage() {
 
   const lead = Array.isArray(project.leads) ? project.leads[0] : project.leads;
   const schouwFormulieren = fotos.filter((f) =>
-    isSchouwFormulier(f.omschrijving)
+    isSchouwFormulierBewijs(f.omschrijving, f.bestandsnaam, f.storage_path)
+  );
+  const opleverFormulieren = fotos.filter((f) =>
+    isOpleveringsrapportBewijs(f.omschrijving, f.bestandsnaam, f.storage_path)
   );
   const normaleFotos = fotos.filter(
-    (f) => !isSchouwFormulier(f.omschrijving)
+    (f) =>
+      !isSchouwFormulierBewijs(
+        f.omschrijving,
+        f.bestandsnaam,
+        f.storage_path
+      ) &&
+      !isOpleveringsrapportBewijs(
+        f.omschrijving,
+        f.bestandsnaam,
+        f.storage_path
+      ) &&
+      !/\.pdf$/i.test(f.bestandsnaam || "") &&
+      !/\.pdf$/i.test(f.storage_path || "")
   );
   const klantNaam = lead?.naam || project.titel || "Klant";
   const batterijStatus = batterijPurchasingStatus(project.materiaal_checks);
@@ -3679,6 +3699,7 @@ export function ProjectPage() {
                               }
                               aanbetalingInc={wfBedragen.aanbetalingInc}
                               warmtefondsInc={wfBedragen.warmtefondsInc}
+                              warmtepomp={isWarmtepompOrder(project)}
                               restantFactuurStatus={
                                 facturen.find(
                                   (f) =>
@@ -4356,6 +4377,82 @@ export function ProjectPage() {
 
                       <div>
                         <p className="text-[10px] font-semibold uppercase tracking-[0.08em] text-muted">
+                          Formulieren
+                        </p>
+                        <ul className="mt-2 divide-y divide-line border border-line">
+                          {(
+                            [
+                              {
+                                key: "schouw",
+                                titel: "Schouwformulier",
+                                items: schouwFormulieren,
+                                empty: "Nog geen schouwformulier",
+                                fallbackName: "schouwformulier.pdf",
+                              },
+                              {
+                                key: "oplever",
+                                titel: "Opleverformulier",
+                                items: opleverFormulieren,
+                                empty: "Nog geen opleverformulier",
+                                fallbackName: "opleverformulier.pdf",
+                              },
+                            ] as const
+                          ).map((groep) =>
+                            groep.items.length === 0 ? (
+                              <li
+                                key={groep.key}
+                                className="flex flex-wrap items-center justify-between gap-2 px-3 py-2.5"
+                              >
+                                <div className="min-w-0">
+                                  <p className="text-sm font-semibold text-ink">
+                                    {groep.titel}
+                                  </p>
+                                  <p className="text-[11px] text-muted">
+                                    {groep.empty}
+                                  </p>
+                                </div>
+                              </li>
+                            ) : (
+                              groep.items.map((f) => (
+                                <li
+                                  key={f.id}
+                                  className="flex flex-wrap items-center justify-between gap-2 px-3 py-2.5"
+                                >
+                                  <div className="min-w-0">
+                                    <p className="text-sm font-semibold text-ink">
+                                      {groep.titel}
+                                    </p>
+                                    <p className="truncate text-[11px] text-muted">
+                                      {f.bestandsnaam || groep.fallbackName} ·{" "}
+                                      {formatDateShort(f.created_at)} · PDF
+                                    </p>
+                                  </div>
+                                  {f.url ? (
+                                    <a
+                                      href={f.url}
+                                      target="_blank"
+                                      rel="noreferrer"
+                                      download={
+                                        f.bestandsnaam || groep.fallbackName
+                                      }
+                                      className="border border-line px-2.5 py-1 text-xs font-semibold text-ink hover:bg-wash"
+                                    >
+                                      PDF downloaden
+                                    </a>
+                                  ) : (
+                                    <span className="text-[11px] text-muted">
+                                      Bestand niet beschikbaar
+                                    </span>
+                                  )}
+                                </li>
+                              ))
+                            )
+                          )}
+                        </ul>
+                      </div>
+
+                      <div>
+                        <p className="text-[10px] font-semibold uppercase tracking-[0.08em] text-muted">
                           Facturen
                         </p>
                         {facturen.length === 0 ? (
@@ -4409,52 +4506,72 @@ export function ProjectPage() {
                   ) : null}
 
                   {docsTab === "rapporten" ? (
-                    schouwFormulieren.length === 0 ? (
+                    schouwFormulieren.length === 0 &&
+                    opleverFormulieren.length === 0 ? (
                       <p className="text-sm text-muted">
-                        Nog geen schouwrapport geüpload.
+                        Nog geen schouw- of opleverformulier.
                       </p>
                     ) : (
                       <ul className="divide-y divide-line border border-line">
-                        {schouwFormulieren.map((f) => {
-                          const isPdf =
-                            /\.pdf$/i.test(f.bestandsnaam || "") ||
-                            /\.pdf$/i.test(f.storage_path || "");
-                          return (
-                            <li
-                              key={f.id}
-                              className="flex flex-wrap items-center justify-between gap-2 px-3 py-2.5"
-                            >
-                              <div className="min-w-0">
-                                <p className="truncate text-sm font-semibold text-ink">
-                                  {f.bestandsnaam || "Schouwrapport"}
-                                </p>
-                                <p className="text-[11px] text-muted">
-                                  {formatDateShort(f.created_at)}
-                                  {isPdf ? " · PDF" : " · Afbeelding"}
-                                </p>
-                              </div>
-                              <div className="flex items-center gap-2">
-                                {f.url ? (
-                                  <a
-                                    href={f.url}
-                                    target="_blank"
-                                    rel="noreferrer"
-                                    className="border border-line px-2.5 py-1 text-xs font-semibold text-ink hover:bg-wash"
+                        {(
+                          [
+                            {
+                              titel: "Schouwformulier",
+                              items: schouwFormulieren,
+                              fallback: "schouwformulier.pdf",
+                            },
+                            {
+                              titel: "Opleverformulier",
+                              items: opleverFormulieren,
+                              fallback: "opleverformulier.pdf",
+                            },
+                          ] as const
+                        ).flatMap((groep) =>
+                          groep.items.map((f) => {
+                            const isPdf =
+                              /\.pdf$/i.test(f.bestandsnaam || "") ||
+                              /\.pdf$/i.test(f.storage_path || "");
+                            return (
+                              <li
+                                key={f.id}
+                                className="flex flex-wrap items-center justify-between gap-2 px-3 py-2.5"
+                              >
+                                <div className="min-w-0">
+                                  <p className="text-sm font-semibold text-ink">
+                                    {groep.titel}
+                                  </p>
+                                  <p className="truncate text-[11px] text-muted">
+                                    {f.bestandsnaam || groep.fallback} ·{" "}
+                                    {formatDateShort(f.created_at)}
+                                    {isPdf ? " · PDF" : " · Afbeelding"}
+                                  </p>
+                                </div>
+                                <div className="flex items-center gap-2">
+                                  {f.url ? (
+                                    <a
+                                      href={f.url}
+                                      target="_blank"
+                                      rel="noreferrer"
+                                      download={
+                                        f.bestandsnaam || groep.fallback
+                                      }
+                                      className="border border-line px-2.5 py-1 text-xs font-semibold text-ink hover:bg-wash"
+                                    >
+                                      PDF downloaden
+                                    </a>
+                                  ) : null}
+                                  <button
+                                    type="button"
+                                    onClick={() => void deleteFoto(f.id)}
+                                    className="border border-line px-2.5 py-1 text-xs font-semibold text-[#C45A12] hover:bg-wash"
                                   >
-                                    Openen
-                                  </a>
-                                ) : null}
-                                <button
-                                  type="button"
-                                  onClick={() => void deleteFoto(f.id)}
-                                  className="border border-line px-2.5 py-1 text-xs font-semibold text-[#C45A12] hover:bg-wash"
-                                >
-                                  Verwijder
-                                </button>
-                              </div>
-                            </li>
-                          );
-                        })}
+                                    Verwijder
+                                  </button>
+                                </div>
+                              </li>
+                            );
+                          })
+                        )}
                       </ul>
                     )
                   ) : null}
@@ -4510,6 +4627,7 @@ export function ProjectPage() {
                 onFacturenChanged={(list) => setFacturen(list)}
                 offerteId={project.offerte_id}
                 warmtefonds={isWarmtefondsProject(project)}
+                warmtepomp={isWarmtepompOrder(project)}
                 financieringStatus={resolveFinancieringStatus(project)}
                 projectStatus={project.status}
                 aanbetalingTeInnenInc={
@@ -4899,6 +5017,7 @@ export function ProjectPage() {
                 f.status === "deels_betaald" ||
                 f.status === "betaald")
           )}
+          warmtepomp={isWarmtepompOrder(project)}
           onDone={async () => {
             setOkMsg("Project omgezet naar Warmtefonds.");
             await load();
