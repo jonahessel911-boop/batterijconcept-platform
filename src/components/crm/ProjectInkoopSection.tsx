@@ -294,10 +294,7 @@ export function ProjectInkoopSection({ project, onProjectUpdated }: Props) {
     project,
     regels.map((r) => ({
       omschrijving: r.omschrijving,
-      sku: r.sku,
       naam: r.omschrijving,
-      product_id: r.product_id,
-      producten: r.producten,
     }))
   );
   if (!loading && wpOrder) return null;

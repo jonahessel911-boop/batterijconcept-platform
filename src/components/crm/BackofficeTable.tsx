@@ -564,14 +564,27 @@ export function BackofficeTable({
           const rows = await fetchAllRows<{
             offerte_id: string;
             omschrijving: string | null;
-            producten: { sku: string | null; naam: string | null } | null;
+            producten:
+              | { sku: string | null; naam: string | null }
+              | { sku: string | null; naam: string | null }[]
+              | null;
           }>((from, to) =>
             sb
               .from("offerte_regels")
               .select("offerte_id, omschrijving, producten(sku, naam)")
               .in("offerte_id", slice)
               .order("id", { ascending: true })
-              .range(from, to)
+              .range(from, to) as PromiseLike<{
+              data: {
+                offerte_id: string;
+                omschrijving: string | null;
+                producten:
+                  | { sku: string | null; naam: string | null }
+                  | { sku: string | null; naam: string | null }[]
+                  | null;
+              }[] | null;
+              error: { message?: string; code?: string } | null;
+            }>
           );
           for (const r of rows) {
             const prod = Array.isArray(r.producten)

@@ -382,11 +382,12 @@ async function applyOpleverServiceVerzoek(
   data: OpleverFormulierData
 ): Promise<{ project?: Record<string, unknown> | null }> {
   // Eerst zonder oplever_formulier (kolom kan ontbreken vóór migratie).
-  let row: {
+  type ProjectOpleverRow = {
     id: string;
     lead_id?: string | null;
     oplever_formulier?: Record<string, unknown> | null;
-  } | null = null;
+  };
+  let row: ProjectOpleverRow | null = null;
   {
     const full = await sb
       .from("projecten")
@@ -409,14 +410,14 @@ async function applyOpleverServiceVerzoek(
         }
         return {};
       }
-      row = basic.data as typeof row;
+      row = basic.data as ProjectOpleverRow;
     } else if (full.error || !full.data) {
       if (full.error) {
         console.error("oplever serviceverzoek load:", full.error.message);
       }
       return {};
     } else {
-      row = full.data as typeof row;
+      row = full.data as ProjectOpleverRow;
     }
   }
   if (!row) return {};
