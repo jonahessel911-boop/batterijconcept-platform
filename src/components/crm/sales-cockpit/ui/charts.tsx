@@ -15,6 +15,7 @@ import {
   XAxis,
   YAxis,
 } from "recharts";
+import { cn } from "@/lib/cn";
 
 const GRID = "#f4f4f5";
 const AXIS = "#a1a1aa";
@@ -161,13 +162,15 @@ function ChartFrame({
   series,
   empty,
   children,
+  className,
 }: {
   series: ChartSeries[];
   empty: boolean;
   children: ReactNode;
+  className?: string;
 }) {
   return (
-    <div className="flex h-full flex-col">
+    <div className={cn("flex h-full flex-col", className)}>
       {series.length > 0 ? <ChartLegend series={series} /> : null}
       <div className="min-h-0 flex-1">
         {empty ? (
@@ -354,6 +357,9 @@ export function DistributionPieChart({
   formatValue,
   innerRadius = 62,
   outerRadius = 96,
+  centerLabel = "deals",
+  centerValue,
+  className,
 }: {
   data: ChartRow[];
   nameKey?: string;
@@ -362,12 +368,20 @@ export function DistributionPieChart({
   formatValue?: (value: number, key: string, row?: ChartRow) => string;
   innerRadius?: number;
   outerRadius?: number;
+  /** Label onder het cijfer in het midden. */
+  centerLabel?: string;
+  /** Override voor het middelste cijfer (default = som van slices). */
+  centerValue?: number;
+  className?: string;
 }) {
-  const total = data.reduce((s, row) => s + (Number(row[valueKey]) || 0), 0);
+  const sliceTotal = data.reduce((s, row) => s + (Number(row[valueKey]) || 0), 0);
+  const total = centerValue != null ? centerValue : sliceTotal;
   const slices = data.filter((row) => (Number(row[valueKey]) || 0) > 0);
+  const valueFont = outerRadius >= 90 ? 28 : outerRadius >= 70 ? 22 : 18;
+  const labelY = outerRadius >= 90 ? "58%" : "57%";
 
   return (
-    <ChartFrame series={[]} empty={slices.length === 0}>
+    <ChartFrame series={[]} empty={slices.length === 0} className={className}>
       <ResponsiveContainer width="100%" height="100%">
         <PieChart margin={{ top: 8, right: 8, left: 8, bottom: 8 }}>
           <Tooltip
@@ -406,21 +420,21 @@ export function DistributionPieChart({
               textAnchor="middle"
               dominantBaseline="middle"
               className="fill-zinc-950"
-              style={{ fontSize: 28, fontWeight: 600 }}
+              style={{ fontSize: valueFont, fontWeight: 600 }}
             >
               {total.toLocaleString("nl-NL")}
             </text>
           ) : null}
-          {total > 0 ? (
+          {total > 0 && centerLabel ? (
             <text
               x="50%"
-              y="58%"
+              y={labelY}
               textAnchor="middle"
               dominantBaseline="middle"
               className="fill-zinc-400"
               style={{ fontSize: 11, fontWeight: 500 }}
             >
-              deals
+              {centerLabel}
             </text>
           ) : null}
         </PieChart>

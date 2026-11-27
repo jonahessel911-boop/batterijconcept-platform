@@ -625,6 +625,7 @@ async function loadWeekBelWallKpis(
     soort: a.soort,
     adviseur_id: a.adviseurId,
     ingepland_door_id: a.plannerId,
+    herpland_van_afspraak_id: a.herplandVanAfspraakId ?? null,
   }));
 
   const leadsById = new Map<string, BelConversieLead>();
@@ -759,12 +760,23 @@ async function loadAppointments(sb: SupabaseClient): Promise<RawAppt[]> {
     sb
       .from("afspraken")
       .select(
-        "id, lead_id, adviseur_id, ingepland_door_id, start_at, end_at, created_at, status, soort"
+        "id, lead_id, adviseur_id, ingepland_door_id, start_at, end_at, created_at, status, soort, herpland_van_afspraak_id"
       )
       .order("id", { ascending: true })
       .range(from, to)
   ).catch(async (err: { message?: string; code?: string }) => {
     const msg = err?.message || "";
+    if (err?.code === "42703" || msg.includes("herpland_van_afspraak_id")) {
+      return fetchAllRows<Record<string, unknown>>((from, to) =>
+        sb
+          .from("afspraken")
+          .select(
+            "id, lead_id, adviseur_id, ingepland_door_id, start_at, end_at, created_at, status, soort"
+          )
+          .order("id", { ascending: true })
+          .range(from, to)
+      );
+    }
     if (err?.code === "42703" || msg.includes("ingepland_door_id")) {
       return fetchAllRows<Record<string, unknown>>((from, to) =>
         sb
@@ -799,6 +811,10 @@ async function loadAppointments(sb: SupabaseClient): Promise<RawAppt[]> {
     createdAt: row.created_at == null ? null : String(row.created_at),
     status: String(row.status || ""),
     soort: (row.soort as string | null) ?? null,
+    herplandVanAfspraakId:
+      row.herpland_van_afspraak_id == null
+        ? null
+        : String(row.herpland_van_afspraak_id),
   }));
 }
 

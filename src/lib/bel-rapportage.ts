@@ -273,6 +273,141 @@ function isGeenContactStatus(status: string | null | undefined): boolean {
   );
 }
 
+/** Geen interesse + andere harde negatieve bel-uitkomsten. */
+export function isNegatieveBelAfboeking(
+  status: string | null | undefined
+): boolean {
+  if (isGeenInteresseStatus(status)) return true;
+  const s = (status || "").trim().toLowerCase();
+  return (
+    s === "foutief_nummer" ||
+    s === "gegevens_niet_overeen" ||
+    s === "huurwoning" ||
+    s === "niet_gekwalificeerd"
+  );
+}
+
+/**
+ * Bel-KPI's voor één datumvenster (zelfde definitie als weekbuckets in
+ * buildBelRapportage). Geschikt voor vandaag / week / maand snapshots.
+ */
+export function buildBelMetricsForRange(opts: {
+  startYmd: string;
+  endYmd: string;
+  leads: BelConversieLead[];
+  afspraken: BelConversieAfspraak[];
+  huisbezoekHistorie?: BelConversieAfspraak[];
+  adviseurs: {
+    id: string;
+    naam: string;
+    rol?: string | null;
+    actief?: boolean;
+    email?: string | null;
+  }[];
+  bellerId?: string | null;
+}): BelMetrics {
+  const historie = opts.huisbezoekHistorie ?? opts.afspraken;
+  const { start } = amsDayBounds(opts.startYmd);
+  const { end } = amsDayBounds(opts.endYmd);
+
+  const allowedCallerIds = new Set<string>();
+  const skipNonCallerIds = new Set<string>();
+  const activeBellerIds: string[] = [];
+  for (const a of opts.adviseurs) {
+    const rol = normalizeRol(a.rol);
+    if (rol === "admin" || isAdminEmail(a.email)) {
+      skipNonCallerIds.add(a.id);
+      continue;
+    }
+    if (rol === "beller" || rol === "backoffice") {
+      allowedCallerIds.add(a.id);
+      if (a.actief !== false) activeBellerIds.push(a.id);
+    } else {
+      skipNonCallerIds.add(a.id);
+    }
+  }
+  const soloBellerId =
+    activeBellerIds.length === 1 ? activeBellerIds[0] : null;
+  const orphanFallback = soloBellerId || null;
+  const filterBeller = opts.bellerId?.trim() || null;
+
+  const eersteIds = eersteNieuweHuisbezoekIdPerLead(historie);
+  const ingeplandIds = huisbezoekLeadIdsOpDag(
+    opts.afspraken,
+    start,
+    end,
+    historie
+  );
+
+  const ingeplandDoorByLead = new Map<string, string>();
+  for (const a of opts.afspraken) {
+    if (!isHuisbezoekAfspraak(a)) continue;
+    if (eersteIds.get(a.lead_id) !== a.id) continue;
+    const door = (a.ingepland_door_id || "").trim();
+    if (!door || !a.created_at) continue;
+    if (!inAmsterdamDayRange(a.created_at, start, end)) continue;
+    if (!ingeplandDoorByLead.has(a.lead_id)) {
+      ingeplandDoorByLead.set(a.lead_id, door);
+    }
+  }
+
+  const acc = newAcc();
+  for (const l of opts.leads) {
+    const gebeldDag = inAmsterdamDayRange(l.laatst_gebeld_at, start, end);
+    const ingeplandDag = ingeplandIds.has(l.id);
+    if (!gebeldDag && !ingeplandDag) continue;
+
+    const isIngepland = ingeplandIds.has(l.id);
+    const belId =
+      attributedBellerIdForLead({
+        lead: l,
+        isIngepland,
+        ingeplandDoorId: ingeplandDoorByLead.get(l.id),
+        fallbackBellerId: orphanFallback,
+        skipAdminIds: skipNonCallerIds,
+      }) || "__onbekend__";
+    if (filterBeller && belId !== filterBeller) continue;
+
+    acc.gebeld += 1;
+    if (isIngepland) {
+      acc.ingepland += 1;
+    } else if (isNegatieveBelAfboeking(l.status)) {
+      acc.geenInteresse += 1;
+    } else if (isGeenContactStatus(l.status)) {
+      acc.geenContact += 1;
+    }
+
+    const status = (l.status || "").trim().toLowerCase();
+    if (status && status !== "nieuw") {
+      acc.nonNieuwGebeld += 1;
+      if (isIngepland) acc.nonNieuwIngepland += 1;
+    }
+  }
+
+  for (const a of opts.afspraken) {
+    if (!isHuisbezoekSoort(a)) continue;
+    if (a.status !== "geannuleerd") continue;
+    if (!a.created_at) continue;
+    if (!inAmsterdamDayRange(a.created_at, start, end)) continue;
+
+    const isPrio = (a.annulering_code || "") === "prio_omplannen";
+    const door = (a.ingepland_door_id || "").trim();
+    let belId = door || "";
+    if (!belId || skipNonCallerIds.has(belId)) {
+      belId = orphanFallback || "__onbekend__";
+    }
+    if (!allowedCallerIds.has(belId) && belId !== "__onbekend__") {
+      belId = orphanFallback || "__onbekend__";
+    }
+    if (filterBeller && belId !== filterBeller) continue;
+
+    if (isPrio) acc.omgepland += 1;
+    else acc.geannuleerd += 1;
+  }
+
+  return finalizeMetrics(acc);
+}
+
 function ymdAmsterdam(d: Date): string {
   return formatInTimeZone(d, AMSTERDAM_TZ, "yyyy-MM-dd");
 }
@@ -463,7 +598,7 @@ export function buildBelRapportage(opts: {
       if (isIngepland) {
         wa.ingepland += 1;
         aa.ingepland += 1;
-      } else if (isGeenInteresseStatus(l.status)) {
+      } else if (isNegatieveBelAfboeking(l.status)) {
         wa.geenInteresse += 1;
         aa.geenInteresse += 1;
       } else if (isGeenContactStatus(l.status)) {

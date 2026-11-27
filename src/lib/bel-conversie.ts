@@ -680,6 +680,246 @@ export function annuleringsPctVanGeplaatst(
   return u != null ? round2(u * 100) : null;
 }
 
+const MS_PER_HOUR = 60 * 60 * 1000;
+
+/** Observatievensters voor vroege uitval (uren sinds inplannen). */
+export const VROEGE_UITVAL_WINDOW_DEFS = {
+  h3: { key: "h3", hours: 3, label: "3u" },
+  d3: { key: "d3", hours: 72, label: "3d" },
+  d7: { key: "d7", hours: 168, label: "7d" },
+} as const;
+
+export type VroegeUitvalWindowKey = keyof typeof VROEGE_UITVAL_WINDOW_DEFS;
+
+export const VROEGE_UITVAL_WINDOWS = Object.keys(
+  VROEGE_UITVAL_WINDOW_DEFS
+) as VroegeUitvalWindowKey[];
+
+/** @deprecated Default blijft 7 dagen (= 168u). */
+export const VROEGE_UITVAL_DAYS = 7;
+
+export function vroegeUitvalWindowLabel(key: VroegeUitvalWindowKey): string {
+  return VROEGE_UITVAL_WINDOW_DEFS[key].label;
+}
+
+function isCancelledWithinHours(
+  placedIso: string,
+  cancelIso: string,
+  hours: number
+): boolean {
+  const placed = new Date(placedIso).getTime();
+  const cancel = new Date(cancelIso).getTime();
+  if (!Number.isFinite(placed) || !Number.isFinite(cancel)) return false;
+  if (cancel < placed) return false;
+  return cancel - placed <= hours * MS_PER_HOUR;
+}
+
+export type VroegeUitvalCounts = {
+  /** Eerste nieuw-bookings in venster (excl. PRIO / deur / niet_gekwalificeerd). */
+  geplaatst: number;
+  /** Daarvan ≥ withinHours oud (volledig geobserveerd). */
+  geplaatstRijp: number;
+  /** Nog jonger dan withinHours — niet in %. */
+  teJong: number;
+  /** Rijp én binnen withinHours geannuleerd (excl. herstel). */
+  geannuleerdVroeg: number;
+  /** geannuleerdVroeg ÷ geplaatstRijp × 100. */
+  uitvalPct: number | null;
+};
+
+/**
+ * Vroege uitval: aandeel eerste huisbezoeken dat binnen N uur na
+ * inplannen is geannuleerd. Alleen rijpe bookings (≥ N uur oud)
+ * tellen mee in de %. Zelfde uitsluitingen als cohort-uitval
+ * (PRIO, herplan-herstel, deur_niet_open / niet_gekwalificeerd).
+ */
+export function countVroegeUitval(opts: {
+  afspraken: BelConversieAfspraak[];
+  historie?: BelConversieAfspraak[];
+  start: Date;
+  end: Date;
+  /** Observatievenster in uren (default 168 = 7d). */
+  withinHours?: number;
+  /** Moment “nu” voor rijpheid (default = new Date()). */
+  now?: Date;
+  /** @deprecated Gebruik withinHours; dagen × 24. */
+  withinDays?: number;
+  leadStatusById?: ReadonlyMap<string, string | null> | null;
+}): VroegeUitvalCounts {
+  const withinHours = Math.max(
+    1,
+    Math.round(
+      opts.withinHours ??
+        (opts.withinDays != null
+          ? opts.withinDays * 24
+          : VROEGE_UITVAL_DAYS * 24)
+    )
+  );
+  const nowMs = (opts.now ?? new Date()).getTime();
+  const rijpBeforeMs = nowMs - withinHours * MS_PER_HOUR;
+
+  const pool = mergeAfsprakenById(opts.afspraken, opts.historie);
+  const eersteAny = eersteNieuwAnyStatusIdPerLead(pool);
+  const eersteActief = eersteNieuweHuisbezoekIdPerLead(pool);
+  const statuses = opts.leadStatusById ?? null;
+
+  let geplaatst = 0;
+  let geplaatstRijp = 0;
+  let teJong = 0;
+  let geannuleerdVroeg = 0;
+
+  for (const a of pool) {
+    if (!isHuisbezoekSoort(a)) continue;
+    if (eersteAny.get(a.lead_id) !== a.id) continue;
+    if ((a.annulering_code || "") === "prio_omplannen") continue;
+    if (
+      statuses &&
+      isBelAfspraakUitvalLeadStatus(statuses.get(a.lead_id) ?? null)
+    ) {
+      continue;
+    }
+    const placedAt = (a.created_at || "").trim();
+    if (!placedAt || !inAmsterdamDayRange(placedAt, opts.start, opts.end)) {
+      continue;
+    }
+
+    geplaatst += 1;
+    const placedMs = new Date(placedAt).getTime();
+    if (!Number.isFinite(placedMs) || placedMs > rijpBeforeMs) {
+      teJong += 1;
+      continue;
+    }
+
+    geplaatstRijp += 1;
+
+    if (a.status !== "geannuleerd") continue;
+    // Herpland → netto gered, geen vroege uitval.
+    if (eersteActief.has(a.lead_id)) continue;
+    const cancelIso = annuleringsMomentIso(a);
+    if (!cancelIso) continue;
+    if (isCancelledWithinHours(placedAt, cancelIso, withinHours)) {
+      geannuleerdVroeg += 1;
+    }
+  }
+
+  const ratio = safeDiv(geannuleerdVroeg, geplaatstRijp);
+  return {
+    geplaatst,
+    geplaatstRijp,
+    teJong,
+    geannuleerdVroeg,
+    uitvalPct: ratio == null ? null : round2(ratio * 100),
+  };
+}
+
+/** Last-minute uitval: uren vóór start_at. */
+export const LATE_UITVAL_WINDOW_DEFS = {
+  before3u: { key: "before3u", hours: 3, label: "3u vóór bezoek" },
+  before24u: { key: "before24u", hours: 24, label: "24u vóór bezoek" },
+} as const;
+
+export type LateUitvalWindowKey = keyof typeof LATE_UITVAL_WINDOW_DEFS;
+
+function isCancelledWithinHoursBeforeStart(
+  startIso: string,
+  cancelIso: string,
+  hours: number
+): boolean {
+  const start = new Date(startIso).getTime();
+  const cancel = new Date(cancelIso).getTime();
+  if (!Number.isFinite(start) || !Number.isFinite(cancel)) return false;
+  const windowStart = start - hours * MS_PER_HOUR;
+  return cancel >= windowStart && cancel <= start;
+}
+
+export type LateUitvalCounts = {
+  /** Eerste nieuw-bookings met start_at in venster. */
+  gepland: number;
+  /** Daarvan start_at ≤ nu (bezoekmoment voorbij). */
+  geplandRijp: number;
+  /** start_at nog in de toekomst. */
+  teJong: number;
+  /** Rijp én geannuleerd binnen N uur vóór start_at. */
+  geannuleerdLaat: number;
+  /** geannuleerdLaat ÷ geplandRijp × 100. */
+  uitvalPct: number | null;
+};
+
+/**
+ * Last-minute uitval: aandeel eerste huisbezoeken dat binnen N uur
+ * vóór start_at is geannuleerd. Alleen afspraken met start_at ≤ nu
+ * (bezoek al “geweest” / venster volledig waarneembaar). Cohort op
+ * start_at, niet op created_at. Zelfde uitsluitingen als vroege uitval.
+ */
+export function countLateUitval(opts: {
+  afspraken: BelConversieAfspraak[];
+  historie?: BelConversieAfspraak[];
+  start: Date;
+  end: Date;
+  /** Uren vóór start_at (default 24). */
+  withinHoursBeforeStart?: number;
+  now?: Date;
+  leadStatusById?: ReadonlyMap<string, string | null> | null;
+}): LateUitvalCounts {
+  const withinHours = Math.max(
+    1,
+    Math.round(opts.withinHoursBeforeStart ?? 24)
+  );
+  const nowMs = (opts.now ?? new Date()).getTime();
+
+  const pool = mergeAfsprakenById(opts.afspraken, opts.historie);
+  const eersteAny = eersteNieuwAnyStatusIdPerLead(pool);
+  const eersteActief = eersteNieuweHuisbezoekIdPerLead(pool);
+  const statuses = opts.leadStatusById ?? null;
+
+  let gepland = 0;
+  let geplandRijp = 0;
+  let teJong = 0;
+  let geannuleerdLaat = 0;
+
+  for (const a of pool) {
+    if (!isHuisbezoekSoort(a)) continue;
+    if (eersteAny.get(a.lead_id) !== a.id) continue;
+    if ((a.annulering_code || "") === "prio_omplannen") continue;
+    if (
+      statuses &&
+      isBelAfspraakUitvalLeadStatus(statuses.get(a.lead_id) ?? null)
+    ) {
+      continue;
+    }
+    const startAt = (a.start_at || "").trim();
+    if (!startAt || !inAmsterdamDayRange(startAt, opts.start, opts.end)) {
+      continue;
+    }
+
+    gepland += 1;
+    const startMs = new Date(startAt).getTime();
+    if (!Number.isFinite(startMs) || startMs > nowMs) {
+      teJong += 1;
+      continue;
+    }
+
+    geplandRijp += 1;
+
+    if (a.status !== "geannuleerd") continue;
+    if (eersteActief.has(a.lead_id)) continue;
+    const cancelIso = annuleringsMomentIso(a);
+    if (!cancelIso) continue;
+    if (isCancelledWithinHoursBeforeStart(startAt, cancelIso, withinHours)) {
+      geannuleerdLaat += 1;
+    }
+  }
+
+  const ratio = safeDiv(geannuleerdLaat, geplandRijp);
+  return {
+    gepland,
+    geplandRijp,
+    teJong,
+    geannuleerdLaat,
+    uitvalPct: ratio == null ? null : round2(ratio * 100),
+  };
+}
+
 /**
  * true als dit het eerste nieuwe huisbezoek van de lead is.
  * Actief: exact de chronologisch eerste niet-geannuleerde.

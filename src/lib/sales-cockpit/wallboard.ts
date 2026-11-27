@@ -1,5 +1,10 @@
 import { BEL_CLAIM_TTL_MS } from "@/lib/bel-claim";
-import { isBellerRol } from "@/lib/rollen";
+import {
+  eersteNieuweHuisbezoekIdPerLead,
+  isHuisbezoekAfspraak,
+  type BelConversieAfspraak,
+} from "@/lib/bel-conversie";
+import { normalizeRol } from "@/lib/rollen";
 import type {
   DayAdvisorRow,
   DayOverview,
@@ -8,6 +13,26 @@ import type {
 } from "@/lib/sales-cockpit/cockpit-metrics";
 import type { RawAppt } from "@/lib/sales-cockpit/classify";
 import { isoToYmd } from "@/lib/sales-cockpit/range";
+
+/** Zelfde credit-rollen als bel-rapportage (niet adviseur/admin). */
+function isBelPlannerRol(rol: string | null | undefined): boolean {
+  const r = normalizeRol(rol);
+  return r === "beller" || r === "backoffice";
+}
+
+function toBelAfspraak(appt: RawAppt): BelConversieAfspraak {
+  return {
+    id: appt.id,
+    lead_id: appt.leadId,
+    created_at: appt.createdAt ?? null,
+    start_at: appt.startAt,
+    status: appt.status,
+    soort: appt.soort,
+    adviseur_id: appt.adviseurId,
+    ingepland_door_id: appt.plannerId,
+    herpland_van_afspraak_id: appt.herplandVanAfspraakId ?? null,
+  };
+}
 
 /**
  * Ruimer dan queue-TTL (15 min): Bel-tab op achtergrond throttled heartbeats,
@@ -132,7 +157,10 @@ export type WallboardOverview = {
   vervolgFysiek: number;
   vervolgTel: number;
   callersActive: number;
-  /** Afspraken die vandaag zijn ingepland (created_at), excl. geannuleerd/verzet/bel-slots. */
+  /**
+   * Bel-ingepland vandaag —zelfde definitie als bel-rapportage:
+   * eerste `nieuw`-huisbezoek per lead, created_at vandaag, ingepland door beller/backoffice.
+   */
   scheduledToday: number;
   advisorsInAppt: number;
   advisors: DayAdvisorRow[];
@@ -177,14 +205,6 @@ export function buildWallWeekKpis(input: {
   };
 }
 
-function isKlantAfspraakSoort(soort: string): boolean {
-  return (
-    soort !== "bel" &&
-    soort !== "warme_bel" &&
-    soort !== "warmtefonds_aanvraag"
-  );
-}
-
 export function buildWallboard(input: {
   day: DayOverview;
   appointments: RawAppt[];
@@ -225,24 +245,25 @@ export function buildWallboard(input: {
   }
   callers.sort((a, b) => b.claimedAt.localeCompare(a.claimedAt));
 
+  const belAfspraken = input.appointments.map(toBelAfspraak);
+  const eersteNieuwIds = eersteNieuweHuisbezoekIdPerLead(belAfspraken);
+
   let scheduledToday = 0;
   const scheduled: WallScheduledAppt[] = [];
   const plannerCount = new Map<string, number>();
   for (const appt of input.appointments) {
-    if (appt.status === "geannuleerd" || appt.status === "verzet") continue;
-    const created = appt.createdAt || appt.startAt;
-    const createdYmd = isoToYmd(created);
-    if (createdYmd !== day.ymd) continue;
-    const soort = (appt.soort || "").trim();
-    // Alleen echte klantafspraken (geen koude bel-slots).
-    if (!isKlantAfspraakSoort(soort)) continue;
+    const bel = toBelAfspraak(appt);
+    if (!isHuisbezoekAfspraak(bel)) continue;
+    if (!appt.createdAt) continue;
+    if (isoToYmd(appt.createdAt) !== day.ymd) continue;
+    if (eersteNieuwIds.get(appt.leadId) !== appt.id) continue;
 
-    scheduledToday += 1;
-
-    // Rail “zojuist ingepland”: alleen door bellers.
+    // Alleen bel-credit: ingepland door beller of backoffice (niet adviseur zelf).
     if (!appt.plannerId) continue;
     const planner = input.advisorsById.get(appt.plannerId);
-    if (!isBellerRol(planner?.rol)) continue;
+    if (!isBelPlannerRol(planner?.rol)) continue;
+
+    scheduledToday += 1;
 
     const meta = input.leadMetaById.get(appt.leadId);
     const adviseur = appt.adviseurId
@@ -253,9 +274,9 @@ export function buildWallboard(input: {
       leadId: appt.leadId,
       leadNumber: meta?.leadNumber || appt.leadId,
       leadNaam: meta?.naam || "Lead",
-      soort: soort || "nieuw",
+      soort: (appt.soort || "").trim() || "nieuw",
       startAt: appt.startAt,
-      createdAt: created,
+      createdAt: appt.createdAt,
       plannerId: appt.plannerId,
       plannerNaam: planner?.naam ?? null,
       adviseurId: appt.adviseurId,

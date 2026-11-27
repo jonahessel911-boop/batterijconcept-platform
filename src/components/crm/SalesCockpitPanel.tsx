@@ -73,6 +73,7 @@ import {
 } from "@/lib/sales-cockpit/range";
 import { cn } from "@/lib/cn";
 import { SalesCockpitWall } from "@/components/crm/SalesCockpitWall";
+import { BelRapportageSection } from "@/components/crm/sales-cockpit/BelRapportageSection";
 import { MONEY_SOUNDS } from "@/components/crm/SaleCelebrationOverlay";
 
 type AdvisorOption = {
@@ -217,6 +218,7 @@ function parseTrendMetrics(raw: string | null): TrendMetricId[] {
 const VIEWS = [
   ["cockpit", "Cockpit"],
   ["kwaliteit", "Kwaliteit sales"],
+  ["bel_rapportage", "Bel rapportage"],
 ] as const;
 
 const QUALITY_PERIODS: { id: QualityPeriodId; label: string }[] = [
@@ -3678,6 +3680,8 @@ export function SalesCockpitPanel({ onOpenMenu }: { onOpenMenu?: () => void }) {
           />
         )
       ) : null}
+
+      {view === "bel_rapportage" ? <BelRapportageSection /> : null}
 
       {view === "cockpit" || !VIEWS.some(([id]) => id === view) ? (
         <div

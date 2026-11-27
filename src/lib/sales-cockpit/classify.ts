@@ -21,6 +21,8 @@ export type RawAppt = {
   createdAt?: string | null;
   status: string;
   soort: string | null;
+  /** Herplande afspraak (bel-rapportage telt deze niet als eerste huisbezoek). */
+  herplandVanAfspraakId?: string | null;
 };
 
 export type RawLead = {
